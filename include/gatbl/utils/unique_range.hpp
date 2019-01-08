@@ -42,20 +42,14 @@ template<typename T, typename D = std::default_delete<T[]>> struct unique_range
     size_t size() const noexcept { return _ptr.value() ? _size : 0; }
     bool   empty() const noexcept { return _ptr.value() && _size; }
 
-    iterator       begin() noexcept { return _ptr.value(); }
     const_iterator begin() const noexcept { return _ptr.value(); }
-    iterator       end() noexcept { return begin() + size(); }
     const_iterator end() const noexcept { return begin() + size(); }
 
-    reference operator[](size_t i) noexcept
-    {
-        assume(i < size());
-        return *(begin() + i);
-    }
+    operator T*() const { return begin(); }
 
     const_reference operator[](size_t i) const noexcept
     {
-        assume(i < size());
+        assume(i < size(), "out of bound i=%lu < size()=%lu", i, size());
         return *(begin() + i);
     }
 

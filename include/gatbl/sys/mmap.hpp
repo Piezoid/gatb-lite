@@ -55,29 +55,32 @@ template<typename T> class mmap_range : public unique_range<T, details::munmappe
         if (likely(ptr != MAP_FAILED)) {
             *this = base(ptr, len, {});
         } else {
-            sys::throw_syserr("mmap");
+            sys::throw_syserr("mmap(%p, %lu, %d, %d, %d, %ld)", addr, bytes, prot, flags, fd, offset);
         }
     }
 
-    bool advise_sequential(size_t len = 0, size_t from = 0)
+    void advise_sequential(size_t len = 0, size_t from = 0)
     {
-        len = len > 0 ? len : this->size();
-        assume(from + len <= this->size());
-
-        return ::madvise(unmapper::unconst_void(this->begin() + sizeof(T) * from), sizeof(T) * len, MADV_SEQUENTIAL)
-               >= 0;
+        this->advise(MADV_SEQUENTIAL, len, from, "madvise(MADV_SEQUENTIAL, %2$lu, %3$d)");
     }
 
-    bool advise_hugepage(size_t len = 0, size_t from = 0)
+    void advise_hugepage(size_t len = 0, size_t from = 0)
     {
-        len = len > 0 ? len : this->size();
-        assume(from + len <= this->size());
-
-        return ::madvise(unmapper::unconst_void(this->begin() + sizeof(T) * from), sizeof(T) * len, MADV_SEQUENTIAL)
-               >= 0;
+        this->advise(MADV_HUGEPAGE, len, from, "madvise(MADV_HUGE_PAGE, %2$lu, %3$d)");
     }
 
   protected:
+    void advise(int advice, size_t len = 0, size_t from = 0, const char error_msg[] = "madvise(%p, %lu, %d)")
+    {
+        len = len > 0 ? len : this->size();
+        assume(
+          from + len <= this->size(), "advise past the end (offset+len=%lu, size()=%lu)", from + len, this->size());
+
+        void*  addr  = unmapper::unconst_void(this->begin() + sizeof(T) * from);
+        size_t bytes = sizeof(T) * len;
+
+        sys::check_ret(::madvise(addr, bytes, advice), error_msg, addr, bytes, advice);
+    }
 };
 
 } // namespace gatbl

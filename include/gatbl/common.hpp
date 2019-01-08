@@ -1,14 +1,6 @@
 #ifndef COMMON_HPP
 #define COMMON_HPP
 
-/* GLIBC configuration */
-#define _FILE_OFFSET_BITS 64
-
-#ifndef PAGE_SIZE
-/// Allow the user to use a global variable or a syscall for portability
-#    define PAGE_SIZE (1UL << 12)
-#endif
-
 #include <cstdio>
 #include <exception>
 
@@ -49,24 +41,33 @@
 
 #ifdef NDEBUG
 #    define DEBUG 0
-#    define assert(expr) static_cast<void>(0)
-#    define assume(expr) (likely((expr)) ? static_cast<void>(0) : __builtin_unreachable())
+#    define assert(...) (static_cast<void>(0))
+#    define assume(expr, ...) (likely((expr)) ? static_cast<void>(0) : __builtin_unreachable())
 #else
 #    define DEBUG 1
 
+namespace gatbl {
+
+/** Handler for assertion/assumption fails
+ * Do not throw exception on purpose (directly terminate)
+ */
 noreturn_attr noinline_fun inline void
-              sourceloc_fail(const char* msg, const char* file, unsigned int line, const char* function) noexcept
+              abort_message(const char msg[]...)
 {
-    std::fprintf(stderr, "%s:%s:%u: %s\n", file, function, line, msg);
+    va_list args;
+    std::vfprintf(stderr, msg, args);
     std::fflush(stderr);
     std::terminate();
 }
 
-#    define assert(expr)                                                                                               \
-        (likely((expr)) ? static_cast<void>(0)                                                                         \
-                        : sourceloc_fail("Assertion '" #expr "' failed.", __FILE__, __LINE__, __PRETTY_FUNCTION__))
+}
 
-#    define assume assert
+#    define sourceloc_fail(what, msg, ...) gatbl::abort_message("%s:%s:%u: " #what " failed: " #msg "\n", __FILE__, __PRETTY_FUNCTION__, __LINE__, ##__VA_ARGS__))
+//#    define sourceloc_fail1(what) gatbl::abort_message("%s:%s:%u: " #what " failed.\n", __FILE__, __PRETTY_FUNCTION__,
+//__LINE__)) #define __sourceloc_fail_nargs(
+
+#    define assert(expr, ...) (likely((expr)) ? static_cast<void>(0) : sourceloc_fail("Assertion '" #expr "'", ##__VA_ARGS__)
+#    define assume(expr, ...) (likely((expr)) ? static_cast<void>(0) : sourceloc_fail("Assumption '" #expr "'", ##__VA_ARGS__)
 
 #endif
 

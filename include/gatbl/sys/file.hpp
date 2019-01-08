@@ -163,7 +163,6 @@ struct file_descriptor : public bound_cursor
 
     template<typename Buffer> size_t pread(Buffer buf, off_t offset) const
     {
-        assume(buf.size() > 0);
         const auto buf_bytes = buf.asbytes();
         return sys::check_ret(::pread(_fd, buf_bytes.begin(), buf_bytes.size(), offset), "pread");
     }

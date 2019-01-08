@@ -24,20 +24,20 @@ template<typename I, typename S = I, typename CI = I> struct iterator_pair
 
     auto size() const noexcept -> decltype(this->end() - this->begin())
     {
-        assume(this->end() >= this->begin());
+        assume(this->end() >= this->begin(), "iterator ends before begin");
         return this->end() - this->begin();
     }
     bool empty() const noexcept { return !(this->begin() != this->end()); }
 
     const_reference operator[](size_t i) const noexcept
     {
-        assume(_begin + i < _end);
+        assume(_begin + i < _end, "Out of bound access %lu >= %lu", i, size());
         return *(_begin + i);
     }
 
     reference operator[](size_t i) noexcept
     {
-        assume(_begin + i < _end);
+        assume(_begin + i < _end, "Out of bound access %lu >= %lu", i, size());
         return *(_begin + i);
     }
 

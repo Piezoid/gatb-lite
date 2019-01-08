@@ -163,7 +163,7 @@ template<typename Range>
 auto
 at(Range& r, size_t pos) -> decltype(concepts::value_require(*(begin(r) + pos), size(r)))
 {
-    assume(pos <= size(r));
+    assume(pos <= size(r), "out of bound i=%lu < size()=%lu", pos, size(r));
     return *(begin(r) + pos);
 }
 
