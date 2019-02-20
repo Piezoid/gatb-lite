@@ -66,7 +66,9 @@ template<typename T> class mmap_range : public unique_range<T, details::munmappe
 
     void advise_hugepage(size_t len = 0, size_t from = 0)
     {
+#ifdef __linux__
         this->advise(MADV_HUGEPAGE, len, from, "madvise(MADV_HUGE_PAGE, %2$lu, %3$d)");
+#endif
     }
 
   protected:
