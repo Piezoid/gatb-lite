@@ -5,9 +5,9 @@
 
 namespace gatbl { namespace utils {
 
-template<bool debug = DEBUG> struct condition_check;
+#ifdef NDEBUG
 
-template<> struct condition_check<false>
+struct condition_check
 {
     void set(bool) const {}
     void unchecked() const {}
@@ -15,7 +15,9 @@ template<> struct condition_check<false>
     void check() const {}
 };
 
-template<> struct condition_check<true>
+#else
+
+struct condition_check
 {
     void set(bool checked) const { _checked = checked; }
     void unchecked() const { _checked = false; }
@@ -28,6 +30,8 @@ template<> struct condition_check<true>
   private:
     mutable bool _checked = false;
 };
+
+#endif
 
 } // namespace utils
 } // namespace gatbl

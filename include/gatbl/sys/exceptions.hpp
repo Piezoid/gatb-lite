@@ -11,6 +11,7 @@
 #include <iostream>
 
 #include "gatbl/common.hpp"
+#include "gatbl/utils/compatibility.hpp"
 
 namespace gatbl { namespace sys {
 // The oxymoric "noinline inline" means that we want a weak non inlineable function
@@ -26,13 +27,13 @@ noreturn_attr noinline_fun inline cold_fun void
     int size = vsnprintf(nullptr, 0, fmt, args);
     if (size < 0) { std::terminate(); }
     _what.resize(static_cast<size_t>(size));
-    int size2 = vsnprintf(_what.data(), _what.size() + 1, fmt, args);
+    int size2 = vsnprintf(&_what.front(), _what.size() + 1, fmt, args);
     if (size2 != size) { std::terminate(); }
 
     throw std::system_error(errcode, std::generic_category(), _what);
 }
 
-template<typename T, typename Tbounded = std::make_unsigned_t<T>, typename... Args>
+template<typename T, typename Tbounded = make_unsigned_t<T>, typename... Args>
 forceinline_fun hot_fun Tbounded
                         check_ret(T ret, Tbounded min, const char* what, Args&&... args)
 {
@@ -41,10 +42,10 @@ forceinline_fun hot_fun Tbounded
 }
 
 template<typename T, typename... Args>
-forceinline_fun hot_fun std::make_unsigned_t<T>
+forceinline_fun hot_fun make_unsigned_t<T>
                         check_ret(T ret, const char* what, Args&&... args)
 {
-    return check_ret(ret, std::make_unsigned_t<T>(0), what, std::forward<Args>(args)...);
+    return check_ret(ret, make_unsigned_t<T>(0), what, std::forward<Args>(args)...);
 }
 
 template<typename T, typename... Args>

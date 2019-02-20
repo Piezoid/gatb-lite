@@ -2,14 +2,17 @@
 #define COMMON_HPP
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstdarg>
 #include <exception>
 
 #define noinline_fun __attribute__((noinline))
 #define forceinline_fun inline __attribute__((always_inline))
 #define flatten_fun __attribute__((flatten))
-#define pure_fun __attribute__((pure))
+#define pure_fun __attribute__((const))
 #define hot_fun __attribute__((hot))
 #define cold_fun __attribute__((cold))
+#define weak_sym __attribute__((weak))
 #define restrict __restrict__
 #define likely(expr) __builtin_expect(!!(expr), 1)
 #define unlikely(expr) __builtin_expect(!!(expr), 0)
@@ -27,7 +30,7 @@
 #    if __has_cpp_attribute(nodiscard)
 #        define nodiscard_attr [[nodiscard]]
 #    elif __has_cpp_attribute(gnu::warn_unused_result)
-#        define nodiscard [[gnu::warn_unused_result]]
+#        define nodiscard_attr [[gnu::warn_unused_result]]
 #    endif
 #endif
 
@@ -37,6 +40,10 @@
 
 #ifndef nodiscard_attr
 #    define nodiscard_attr __attribute__((warn_unused_result))
+#endif
+
+#ifdef assert
+#    undef assert
 #endif
 
 #ifdef NDEBUG
@@ -55,19 +62,18 @@ noreturn_attr noinline_fun inline void
               abort_message(const char msg[]...)
 {
     va_list args;
+    va_start(args, msg);
     std::vfprintf(stderr, msg, args);
+    va_end(args);
     std::fflush(stderr);
-    std::terminate();
+    std::abort();
 }
 
 }
 
-#    define sourceloc_fail(what, msg, ...) gatbl::abort_message("%s:%s:%u: " #what " failed: " #msg "\n", __FILE__, __PRETTY_FUNCTION__, __LINE__, ##__VA_ARGS__))
-//#    define sourceloc_fail1(what) gatbl::abort_message("%s:%s:%u: " #what " failed.\n", __FILE__, __PRETTY_FUNCTION__,
-//__LINE__)) #define __sourceloc_fail_nargs(
-
-#    define assert(expr, ...) (likely((expr)) ? static_cast<void>(0) : sourceloc_fail("Assertion '" #expr "'", ##__VA_ARGS__)
-#    define assume(expr, ...) (likely((expr)) ? static_cast<void>(0) : sourceloc_fail("Assumption '" #expr "'", ##__VA_ARGS__)
+#    define __gatbl_sourceloc_fail(what, msg, ...) gatbl::abort_message("%s:%s:%u: " #what " failed: " #msg "\n", __FILE__, __PRETTY_FUNCTION__, __LINE__, ##__VA_ARGS__))
+#    define assert(expr, ...) (likely((expr)) ? static_cast<void>(0) : __gatbl_sourceloc_fail("Assertion '" #expr "'", ##__VA_ARGS__)
+#    define assume(expr, ...) (likely((expr)) ? static_cast<void>(0) : __gatbl_sourceloc_fail("Assumption '" #expr "'", ##__VA_ARGS__)
 
 #endif
 

@@ -15,35 +15,43 @@ template<typename I, typename S = I, typename CI = I> struct iterator_pair
     using sentinel        = S;
     using reference       = decltype(*std::declval<iterator>());
     using const_reference = decltype(*std::declval<const_iterator>());
-    using element_type    = std::remove_reference_t<reference>;
+    using element_type    = remove_reference_t<reference>;
     using repr_t          = I;
 
     iterator       begin() noexcept { return _begin; }
     const_iterator begin() const noexcept { return _begin; }
     sentinel       end() const noexcept { return _end; }
 
-    auto size() const noexcept -> decltype(this->end() - this->begin())
+    template<typename _I = I, typename _S = S>
+    auto size() const noexcept -> make_unsigned_t<decltype(std::declval<_S>() - std::declval<_I>())>
     {
         assume(this->end() >= this->begin(), "iterator ends before begin");
         return this->end() - this->begin();
     }
     bool empty() const noexcept { return !(this->begin() != this->end()); }
 
-    const_reference operator[](size_t i) const noexcept
+    template<typename _I = I> auto operator[](size_t i) const noexcept -> decltype(*(std::declval<_I>() + i))
     {
         assume(_begin + i < _end, "Out of bound access %lu >= %lu", i, size());
         return *(_begin + i);
     }
 
-    reference operator[](size_t i) noexcept
+    template<typename _I = I> auto operator[](size_t i) noexcept -> decltype(*(std::declval<_I>() + i))
     {
         assume(_begin + i < _end, "Out of bound access %lu >= %lu", i, size());
         return *(_begin + i);
     }
 
-    repr_t   _begin = {};
-    sentinel _end   = {};
+    repr_t   _begin;
+    sentinel _end;
 };
+
+template<typename I, typename S, typename CI = I>
+inline constexpr iterator_pair<I, S, CI>
+make_range(I begin, S end)
+{
+    return {begin, end};
+}
 
 template<typename Container>
 inline constexpr auto
