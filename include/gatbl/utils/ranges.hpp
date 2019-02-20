@@ -1,6 +1,7 @@
 #ifndef RANGES_HPP
 #define RANGES_HPP
 
+#include <cstring>
 #include <utility>
 #include <memory>
 #include <iterator>
@@ -8,155 +9,9 @@
 #include <algorithm>
 #include <ostream>
 #include "gatbl/utils/concepts.hpp"
+#include "gatbl/utils/compatibility.hpp"
 
 namespace gatbl {
-
-/// First we ensure that we have the customization points from C++11..17:
-#if __cplusplus >= 201103L
-using std::begin;
-using std::end;
-#else
-template<typename C>
-inline constexpr auto
-begin(C& c) -> decltype(c.begin())
-{
-    return c.begin();
-}
-template<typename C>
-inline constexpr auto
-begin(const C& c) -> decltype(c.begin())
-{
-    return c.begin();
-}
-template<typename C>
-inline constexpr auto
-end(C& c) -> decltype(c.end())
-{
-    return c.end();
-}
-template<typename C>
-inline constexpr auto
-end(const C& c) -> decltype(c.end())
-{
-    return c.end();
-}
-template<typename T, size_t N> inline constexpr T* begin(T (&arr)[N]) { return arr; }
-template<typename T, size_t N> inline constexpr T* end(T (&arr)[N]) { return arr + N; }
-#endif // __cplusplus >= 201103L
-
-#if __cplusplus >= 201402L
-using std::cbegin;
-using std::cend;
-using std::crbegin;
-using std::crend;
-using std::rbegin;
-using std::rend;
-#else
-template<typename C>
-inline constexpr auto
-cbegin(const C& c) -> decltype(c.begin())
-{
-    return c.begin();
-}
-template<typename C>
-inline constexpr auto
-cend(const C& c) -> decltype(c.end())
-{
-    return c.end();
-}
-template<typename C>
-inline constexpr auto
-rbegin(C& c) -> decltype(c.rbegin())
-{
-    return c.rbegin();
-}
-template<typename C>
-inline constexpr auto
-rbegin(const C& c) -> decltype(c.rbegin())
-{
-    return c.rbegin();
-}
-template<typename C>
-inline constexpr auto
-rend(C& c) -> decltype(c.rend())
-{
-    return c.rend();
-}
-template<typename C>
-inline constexpr auto
-rend(const C& c) -> decltype(c.rend())
-{
-    return c.rend();
-}
-template<typename C>
-inline constexpr auto
-crbegin(const C& c) -> decltype(c.rbegin())
-{
-    return c.rbegin();
-}
-template<typename C>
-inline constexpr auto
-crend(const C& c) -> decltype(c.rend())
-{
-    return c.rend();
-}
-template<typename T, size_t N>
-inline constexpr const T*
-cbegin(const T (&arr)[N])
-{
-    return arr;
-}
-template<typename T, size_t N>
-inline constexpr const T*
-cend(const T (&arr)[N])
-{
-    return arr + N;
-}
-template<typename T, size_t N> inline constexpr std::reverse_iterator<T*> rbegin(T (&arr)[N]) { return {arr + N}; }
-template<typename T, size_t N> inline constexpr std::reverse_iterator<T*> rend(T (&arr)[N]) { return {arr}; }
-template<typename T, size_t N>
-inline constexpr std::reverse_iterator<const T*>
-crbegin(const T (&arr)[N])
-{
-    return {arr + N};
-}
-template<typename T, size_t N>
-inline constexpr std::reverse_iterator<const T*>
-crend(const T (&arr)[N])
-{
-    return {arr};
-}
-#endif // __cplusplus >= 201402L
-
-#if __cplusplus >= 201703L
-using std::empty;
-using std::size;
-#else
-template<typename C>
-inline constexpr auto
-size(const C& c) -> decltype(c.size())
-{
-    return c.size();
-}
-template<typename C>
-inline constexpr auto
-empty(const C& c) -> decltype(c.empty())
-{
-    return c.empty();
-}
-template<typename T, size_t N>
-inline constexpr size_t
-size(const T (&)[N])
-{
-    return N;
-}
-template<typename T, size_t N>
-inline constexpr size_t
-empy(const T (&)[N])
-{
-    return false;
-}
-#endif // __cplusplus >= 201402L
 
 /// Customization point for random acces
 template<typename Range>
@@ -217,7 +72,8 @@ template<typename Range> using sentinel_t         = decltype(end(std::declval<Ra
 template<typename Range> using reverse_iterator_t = decltype(rbegin(std::declval<Range&>()));
 template<typename Range> using reverse_sentinel_t = decltype(rend(std::declval<Range&>()));
 template<typename Range> using reference_t        = decltype(*begin(std::declval<Range&>()));
-template<typename Range> using value_t            = std::remove_reference_t<reference_t<Range>>;
+template<typename Range> using const_reference_t  = decltype(*begin(std::declval<const Range&>()));
+template<typename Range> using value_t            = remove_reference_t<reference_t<Range>>;
 
 // [string.view.io], Inserters and extractors
 template<typename R, typename Traits, typename = decltype(concepts::CStringRange<const R>)>
@@ -228,9 +84,9 @@ operator<<(std::basic_ostream<char, Traits>& os, const R& s)
 }
 
 /// Find specialization for char like types
-template<typename T, typename = std::enable_if_t<sizeof(T) == 1>>
+template<typename T, typename = enable_if_t<sizeof(T) == 1>>
 inline T*
-find(T* first, T* last, const std::remove_cv_t<T>& v)
+find(T* first, T* last, const remove_const_t<T>& v)
 {
     T* p = static_cast<T*>(memchr(first, reinterpret_cast<const int&>(v), last - first));
     return likely(p != nullptr) ? p : last;
@@ -264,7 +120,7 @@ equal(const X& x, const Y& y) noexcept
     return equal(begin(x), end(y), begin(y), end(y));
 }
 
-template<typename X, typename Y, typename = decltype(concepts::ZippableRanges<X, Y, std::less<>>)>
+template<typename X, typename Y, typename = decltype(concepts::ZippableRanges<X, Y, std::less<X>>)>
 inline constexpr bool
 lexicographical_compare(const X& x, const Y& y)
 {

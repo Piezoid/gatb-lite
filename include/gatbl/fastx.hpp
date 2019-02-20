@@ -13,7 +13,7 @@ struct parse_error : std::runtime_error
     {}
 };
 
-template<typename Record> struct sequence_iterator : private utils::condition_check<>
+template<typename Record> struct sequence_iterator : private utils::condition_check
 {
     using char_iterator = typename Record::char_iterator;
     using range         = iterator_pair<char_iterator>;
@@ -118,13 +118,14 @@ template<typename CharIt = const char*, typename std::iterator_traits<CharIt>::v
 class fasta_record
 {
     using char_iterator_trais = std::iterator_traits<CharIt>;
-    static_assert(std::is_same_v<typename char_iterator_trais::iterator_category, std::random_access_iterator_tag>,
+    static_assert(std::is_same<typename char_iterator_trais::iterator_category, std::random_access_iterator_tag>::value,
                   "Random acces iterator required");
 
   public:
     using char_iterator = CharIt;
     using substring_t   = iterator_pair<char_iterator>;
-    static_assert(std::is_same_v<char, typename char_iterator_trais::value_type>, "iterator must yield char values");
+    static_assert(std::is_same<char, typename char_iterator_trais::value_type>::value,
+                  "iterator must yield char values");
     static constexpr char header_char = HeaderChar;
 
     fasta_record()                    = default;

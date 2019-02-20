@@ -10,8 +10,8 @@
 namespace gatbl {
 
 namespace details {
-// FIXME: < c++17
-static inline const size_t page_size = sys::check_ret(::sysconf(_SC_PAGESIZE), "page size");
+
+CPP17_STATIC_INLINE_VAR const size_t page_size = sys::check_ret(::sysconf(_SC_PAGESIZE), "page size");
 
 template<typename T> struct munmapper
 {
@@ -42,12 +42,12 @@ template<typename T> class mmap_range : public unique_range<T, details::munmappe
 
   public:
     using base::operator=;
-    mmap_range(int                     fd,
-               size_t                  len,
-               int                     prot   = PROT_READ,
-               int                     flags  = MAP_PRIVATE,
-               std::remove_const_t<T>* addr   = nullptr,
-               off_t                   offset = 0)
+    mmap_range(int                fd,
+               size_t             len,
+               int                prot   = PROT_READ,
+               int                flags  = MAP_PRIVATE,
+               remove_const_t<T>* addr   = nullptr,
+               off_t              offset = 0)
       : base()
     {
         const size_t bytes = details::munmapper<T>::size_to_bytes(len);

@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 
+#include "gatbl/utils/compatibility.hpp"
 #include "gatbl/sys/exceptions.hpp"
 #include "gatbl/sys/mmap.hpp"
 
@@ -150,12 +151,12 @@ struct file_descriptor : public bound_cursor
         sys::check_ret(::posix_fadvise(_fd, offset, len, advise), "posix_fadvise");
     }
 
-    template<typename T = std::byte>
-    mmap_range<T> mmap(off_t                   offset = 0,
-                       size_t                  len    = 0,
-                       int                     prot   = PROT_READ,
-                       int                     flags  = MAP_PRIVATE,
-                       std::remove_const_t<T>* addr   = nullptr)
+    template<typename T = byte>
+    mmap_range<T> mmap(off_t              offset = 0,
+                       size_t             len    = 0,
+                       int                prot   = PROT_READ,
+                       int                flags  = MAP_PRIVATE,
+                       remove_const_t<T>* addr   = nullptr)
     {
         if (offset == 0 && len == 0) { len = this->size() / sizeof(T); }
         return mmap_range<T>(_fd, len, prot, flags, addr, offset);
