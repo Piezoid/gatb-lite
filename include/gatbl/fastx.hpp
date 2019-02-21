@@ -1,7 +1,7 @@
 #ifndef FASTX_HPP
 #define FASTX_HPP
 
-#include "gatbl/utils/interator_pair.hpp"
+#include "gatbl/utils/iterator_pair.hpp"
 #include "gatbl/utils/condition_check.hpp"
 
 namespace gatbl {
@@ -20,12 +20,13 @@ template<typename Record> struct sequence_iterator : private utils::condition_ch
     using value_type    = Record;
 
     /// Initialize an iterator for a sub range of text data: we must first sync to the first header.
+    /// NB: this will skip the first record if begin point exactly at it (first char in header).
+    ///     Because we can't check for a newline preceding it. When random seeking, we need to do this check, since a
+    ///     header char can occur in quality.
     sequence_iterator(const char_iterator& begin, const char_iterator& end)
     {
-        char_iterator p = find(begin, end, '\n');
-
-        while (++p < end) {
-            if (*p == '@') {
+        for (char_iterator p = find(begin, end, '\n'); ++p < end;) {
+            if (*p == value_type::header_char) {
                 _record = {p};
                 return;
             }
@@ -35,25 +36,31 @@ template<typename Record> struct sequence_iterator : private utils::condition_ch
         _record = {end};
     }
 
+    /// Initialize an iterator for a complete file: the iterator must point to a sequence.
+    sequence_iterator(char_iterator it)
+      : _record(it)
+    {
+        if (unlikely(*it != value_type::header_char)) throw parse_error("Not header found at the start of the file");
+    }
+
     sequence_iterator(const sequence_iterator&) = default;
     sequence_iterator(sequence_iterator&&)      = default;
     sequence_iterator& operator=(const sequence_iterator&) = default;
     sequence_iterator& operator=(sequence_iterator&&) = default;
 
-    // This pair of implicit conversions allows to have a seemingly different end iterator type
-    sequence_iterator(char_iterator it)
-      : _record(it)
-    {}
-    operator char_iterator() const { return _record.begin(); }
-
-    bool operator<(char_iterator& end) const
+    /// Here is the trick: we parse when checking for completion
+    /// This allows to have the sentinel in hand for parsing
+    bool operator<(const char_iterator& end) const
     {
         bool parseok = _record.parse(end);
-        condition_check::set(parseok);
+        condition_check::checked();
         return parseok;
     }
 
-    bool operator!=(char_iterator& end) const { return operator<(end); }
+    bool operator<(const sequence_iterator& other) const { return operator<(other._record.begin()); }
+
+    bool operator!=(const char_iterator& other) const { return operator<(other); }
+    bool operator!=(const sequence_iterator& other) const { return operator<(other); }
 
     sequence_iterator& operator++()
     {
@@ -85,6 +92,7 @@ template<typename Record> struct std::iterator_traits<gatbl::sequence_iterator<R
 
 namespace gatbl {
 
+// FIXME: deprecate these helpers for a more general solution. See make_range() instead
 template<typename Record>
 inline iterator_pair<sequence_iterator<Record>, typename Record::char_iterator>
 seq_record_range(const typename Record::char_iterator& begin, const typename Record::char_iterator& end)
@@ -147,7 +155,7 @@ class fasta_record
     const substring_t sequence() const
     {
         assume(*this, "empty fasta record");
-        return {_sequence_header_end + 1 /* "\n" */, _sequence_end};
+        return {_sequence_header_end + 1 /* '\n' */, _sequence_end};
     }
 
     char_iterator end() const { return _sequence_end; }
@@ -159,16 +167,17 @@ class fasta_record
       : _data(it)
     {}
 
-    bool parse(const char_iterator& start, const char_iterator& end)
+    bool parse(const char_iterator& end)
     {
-        _data = start;
         if (likely(_parse(end) < end)) { return true; }
 
-        _sequence_header_end = start;
-        _sequence_end        = start;
+        _sequence_header_end = this->begin();
+        _sequence_end        = this->begin();
         throw_parse_error();
         return false;
     }
+
+    void next() { this->_data = sequence().end() + 1 /* '\n' */; }
 
     void set_error(const char* e) noexcept
     {
@@ -201,7 +210,7 @@ class fasta_record
         assert(!contains(p, newline, '\n'), "newline found in header");
 
         // Sequence
-        p = newline + 1; // skip "\n"
+        p = newline + 1; // skip '\n'
         if (unlikely(p >= end)) return end;
         if (unlikely(*p == '\n')) {
             set_error("Empty sequence");
@@ -247,14 +256,14 @@ template<typename CharIt = const char*> class fastq_record : public fasta_record
         return false;
     }
 
-    void next() { this->_data = quality().end() + 1 /* "\n" */; }
+    void next() { this->_data = quality().end() + 1 /* '\n' */; }
 
   private:
     char_iterator _parse(const char_iterator end)
     {
         char_iterator p = base::_parse(end);
         if (unlikely(p >= end)) return end;
-        p++; // "\n"
+        p++; // '\n'
 
         // Quality header
         if (unlikely(p + 1 >= end)) return end;
