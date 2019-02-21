@@ -17,9 +17,7 @@ process_fastq(std::string filename, F&& callback)
     // FIXME: those are optional but we really want to knwow if they work for testing
     data.advise_hugepage();
     data.advise_sequential();
-    for (auto& rec : seq_record_subrange<fastq_record<const char*>>(data)) {
-        callback(rec);
-    }
+    RANGES_FOR(auto rec, seq_record_subrange<fastq_record<const char*>>(data)) { callback(rec); }
 }
 
 template<typename T>
