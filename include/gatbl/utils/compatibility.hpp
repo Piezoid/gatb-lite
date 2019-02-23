@@ -107,13 +107,42 @@ crend(const T (&arr)[N])
     return {arr};
 }
 
-// note: this implementation does not disable this overload for array types
-template<typename T, typename... Args>
-std::unique_ptr<T>
+namespace details {
+template<class T> struct Unique_if
+{
+    using Single_object = std::unique_ptr<T>;
+};
+
+template<class T> struct Unique_if<T[]>
+{
+    using Unknown_bound = std::unique_ptr<T[]>;
+};
+
+template<class T, size_t N> struct Unique_if<T[N]>
+{
+    using Known_bound = void;
+};
+}
+
+template<class T, class... Args>
+typename details::Unique_if<T>::Single_object
 make_unique(Args&&... args)
 {
     return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
 }
+
+template<class T>
+typename details::Unique_if<T>::Unknown_bound
+make_unique(size_t n)
+{
+    typedef typename std::remove_extent<T>::type U;
+    return std::unique_ptr<T>(new U[n]());
+}
+
+template<class T, class... Args>
+typename details::Unique_if<T>::Known_bound
+make_unique(Args&&...)
+  = delete;
 
 template<class T> using remove_const_t = typename std::remove_const<T>::type;
 
