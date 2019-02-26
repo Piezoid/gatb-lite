@@ -49,7 +49,7 @@ template<typename T, size_t max_size> struct bounded_size_wrapper<T, max_size, t
     {}
     value_type&       get() noexcept { return *value; }
     const value_type& get() const noexcept { return *value; }
-    ~bounded_size_wrapper() noexcept(noexcept(std::declval<value_type*>->~value_type())) { delete value; }
+    ~bounded_size_wrapper() noexcept(noexcept(std::declval<value_type>().~value_type())) { delete value; }
 
   private:
     value_type* value;
@@ -61,6 +61,13 @@ namespace sched {
 
 constexpr size_t hardware_destructive_interference_size = 64;
 
+/** jobslot is a like a reference counted std::function
+ *
+ * The functor data is in inline storage, up to some number of cache lines.
+ *
+ * Users must derive the jobtoken (smart pointer reference counter) and typed (wrapper over jobtoken
+ * derived classes for unforgetting the type of the functor).
+ */
 template<typename Fun, size_t cache_lines = 1> class jobslot;
 
 template<typename... Args, size_t cache_lines>
@@ -70,7 +77,9 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
     class jobtoken;
 
   protected:
-    using func_ptr           = void (*)(jobtoken&&, Args...) CPP17_NOEXCEPT;
+    /// Type of the raw function. it receive the token from witch it was invoked.
+    using func_ptr = void (*)(jobtoken, Args...) CPP17_NOEXCEPT;
+    /// Type of the finish handler. Expected to be set by the function. Called when the reference count reaches 0.
     using finish_handler_ptr = void (*)(void*) CPP17_NOEXCEPT;
 
   private:
@@ -80,30 +89,66 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
 
     alignas(hardware_destructive_interference_size) char _data[data_size];
 
-    // The triaval constructor make an empty job in finished state
     std::atomic<size_t> _state_idx{0};
     // _state_idx = 0 is empty job ready to be allocated in the pool
-    // _state_idx = 1 is a job being deleted
+    // _state_idx = 1 is a job being finished
     // _state_idx = 1 + n is scheduled job with (n-1) alive references
     func_ptr _function = nullptr;
 
+    /// Decrement the state counter
+    void release() noexcept
+    {
+        // jobslot type invariants are checked here, now that the type is complete
+        static_assert(sizeof(jobslot) == cache_lines * hardware_destructive_interference_size,
+                      "job is the size of some cache line");
+        static_assert(alignof(jobslot) % hardware_destructive_interference_size == 0,
+                      "job is aligned on cache line boundaries");
+        assert(reinterpret_cast<uintptr_t>(this) % hardware_destructive_interference_size == 0,
+               "Unaligned job slot"); // RT version of the above
+
+        auto state_idx = _state_idx.fetch_sub(1,
+                                              // TSan doesn't handle well the conditional fence here
+                                              __has_feature(thread_sanitizer) ? std::memory_order_acq_rel
+                                                                              : std::memory_order_release);
+        assume(state_idx > 1, "Double free job slot");
+        if (state_idx == 2) // If it reaches 1 the job completion handler is executed
+        {
+            std::atomic_thread_fence(std::memory_order_acquire);
+            // Publishing _state_idx == 1 allows to postpone the reuse of the pool's slot while running the
+            // completion chain.
+            if (_function != nullptr) {
+                // Call the completion handler
+                reinterpret_cast<finish_handler_ptr>(_function)(_data);
+                if (DEBUG) _function = nullptr;
+            }
+
+            // Mark the job as finished so it can be reallocated.
+            // Pretty sure that relaxed ordering is enough here: We don't mind if the allocator sees the
+            // previously released value _state_idx=1 instead of 0. Sadly, TSan thinks otherwise...
+            static constexpr std::memory_order mo
+              = __has_feature(thread_sanitizer) ? std::memory_order_release : std::memory_order_relaxed;
+            if (DEBUG) {
+                assert(_state_idx.compare_exchange_strong(--state_idx, 0, mo, std::memory_order_relaxed),
+                       "Race condition in job release()");
+            } else {
+                _state_idx.store(0, mo);
+            }
+        }
+    }
+
   public:
+    // The triaval constructor make an empty job in finised state
     jobslot() noexcept      = default;
     jobslot(const jobslot&) = delete;
     jobslot& operator=(const jobslot&) = delete;
 
 #if DEBUG
-    ~jobslot() noexcept { assert(empty(), "non executed job destroyed"); }
+    ~jobslot() noexcept { assert(_state_idx < 2, "non executed job destroyed"); }
 #else
     ~jobslot() noexcept = default;
 #endif
 
-    bool empty(std::memory_order mo = std::memory_order_acquire) const noexcept
-    {
-        bool isempty = _state_idx.load(mo) == 0;
-        assert(!isempty || _function == nullptr, "Disowned and ran job with a live function pointer");
-        return isempty;
-    }
+    bool empty(std::memory_order mo = std::memory_order_acquire) const noexcept { return _state_idx.load(mo) == 0; }
 
     class jobtoken
     {
@@ -168,46 +213,17 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
 
         jobtoken& operator=(jobtoken&& other)
         {
-            std::swap(_j, other._j);
+            if (operator bool()) _j->release();
+            _j       = other._j;
+            other._j = nullptr;
             return *this;
         }
 
         /// Release the ownership of the job
-        ~jobtoken() noexcept
+        forceinline_fun ~jobtoken() noexcept
         {
             if (operator bool()) {
-
-                // Decrement the sate counter
-                auto state_idx = _j->_state_idx.fetch_sub(1,
-                                                          // TSan doesn't handle well the conditional fence here
-                                                          __has_feature(thread_sanitizer) ? std::memory_order_acq_rel
-                                                                                          : std::memory_order_release);
-                assume(state_idx > 1, "Double free job slot");
-                if (state_idx == 2) // If it reaches 1 the job completion handler is executed
-                {
-                    std::atomic_thread_fence(std::memory_order_acquire);
-                    // Publishing _state_idx == 1 allows to postpone the reuse of the pool's slot while running the
-                    // completion chain.
-                    if (_j->_function != nullptr) {
-                        // Call the completion handler
-                        reinterpret_cast<finish_handler_ptr>(_j->_function)(_j->_data);
-                        if (DEBUG) _j->_function = nullptr;
-                    }
-
-                    // Mark the job as finished so it can be reallocated.
-                    // Pretty sure that relaxed ordering is enough here:
-                    // We don't mind if the allocator sees the previously released value _state_idx=1 instead of 0.
-                    // Sadly, TSan thinks otherwise...
-                    static constexpr std::memory_order mo
-                      = __has_feature(thread_sanitizer) ? std::memory_order_release : std::memory_order_relaxed;
-                    if (DEBUG) {
-                        // printf("%lu finished job %p\n", std::this_thread::get_id(), this);
-                        assert(_j->_state_idx.compare_exchange_strong(--state_idx, 0, mo, std::memory_order_relaxed),
-                               "Race condition in job release()");
-                    } else {
-                        _j->_state_idx.store(0, mo);
-                    }
-                }
+                _j->release();
                 _j = nullptr;
             }
         }
@@ -273,7 +289,7 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
         /// An example of job initialization that can be achieved with the above mutators
         template<typename... ConstrArgs> void init(ConstrArgs&&... args)
         {
-            Base::init([](jobtoken && token, Args... args) noexcept {
+            Base::init([](jobtoken token, Args... args) noexcept {
                 // In the function, the type of the functor is forgoten, so get it back by constructing a typed token of
                 // the right type
                 typed tytk(std::move(token));
@@ -294,31 +310,33 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
         using Base::Base;
     };
 
-    /// Initialize the jobslot and return multiple job_ptr in one go
-    template<size_t n, typename Token, typename... ConstrArgs> std::array<Token, n> init(ConstrArgs&&... constr_args)
+    /// Initialize the jobslot and return a token
+    template<typename Token, typename... ConstrArgs>
+    auto init(ConstrArgs&&... constr_args) -> decltype(Token(jobtoken()))
     {
-
-        static_assert(n > 0, "At least one job reference must be instanciated");
-
-        // jobslot type invariants are checked here, now that the type is complete
-        static_assert(sizeof(jobslot) == cache_lines * hardware_destructive_interference_size,
-                      "job is the size of some cache line");
-        static_assert(alignof(jobslot) % hardware_destructive_interference_size == 0,
-                      "job is aligned on cache line boundaries");
-        assert(reinterpret_cast<uintptr_t>(this) % hardware_destructive_interference_size == 0,
-               "Unaligned job slot"); // RT version of the above
-
         // State transition to an occupied jobslot
         assert(empty(), "Allocated a non freed job");
-        _state_idx.store(1 + n, std::memory_order_relaxed);
+        _state_idx.store(2, std::memory_order_relaxed);
 
-        std::array<Token, n> refs{};
-        for (Token& ref : refs)
-            ref.set_noacquire(this);
+        Token token{};
+        token.set_noacquire(this);
+        token.init(std::forward<ConstrArgs>(constr_args)...);
+        return token;
+    }
 
-        refs[0].init(std::forward<ConstrArgs>(constr_args)...);
+    /// Initialize the jobslot and return a pair of token
+    template<typename Token, typename... ConstrArgs>
+    auto init_pair(ConstrArgs&&... constr_args) -> std::pair<decltype(Token(jobtoken())), Token>
+    {
+        // State transition to an occupied jobslot
+        assert(empty(), "Allocated a non freed job");
+        _state_idx.store(3, std::memory_order_relaxed);
 
-        return refs;
+        std::pair<Token, Token> token{};
+        token.first.set_noacquire(this);
+        token.first.init(std::forward<ConstrArgs>(constr_args)...);
+        token.second.set_noacquire(this);
+        return token;
     }
 };
 
@@ -336,24 +354,22 @@ template<typename T, size_t cap_bits> struct work_stealing_queue
     static constexpr idx_t mask     = capacity - 1;
 
     /** Try to push a item (reserved to the single-producer/owner)
-     * In case of success (queue is not full) the ownership of the item is passed to the queue and
-     * a trivially constructed element is returned. Otherwise the element is returned to the caller.
+     * In case of success (queue is not full) the ownership of the item is passed and the reference is left in the
+     * moved-from state.
      */
-    void push(T&& job) noexcept
+    void push(T& job) noexcept
     {
         assert(job, "pushing empty job");
-        // Bottom: relaxed load, since only _bottom is only modified by the worker owning the queue
-        idx_t b = _bottom.load(std::memory_order_relaxed);
+        // Bottom: relaxed load, since _bottom is only modified by the worker owning the queue
+        idx_t b = _bottom.load(std::memory_order_relaxed); // Will be incremented
 
         // Top: relaxed load, since _top is monotonically increasing we only risk false
         // positives in the "is full" test bellow
         idx_t t = _top.load(std::memory_order_relaxed);
 
         if (likely(b - t < capacity)) { // not full
-            _arr[b++ & mask] = std::move(job);
+            new (&at(b++)) T(std::move(job));
             _bottom.store(b, std::memory_order_release);
-            // printf("%lu pushed job %p in slot %lu, top=%lu bottom=%lu=>%lu\n", std::this_thread::get_id(), &job, (b -
-            // 1) & mask, t, b - 1, b);
         }
     }
 
@@ -363,30 +379,27 @@ template<typename T, size_t cap_bits> struct work_stealing_queue
         // First we decrement _bottom: load is relaxed since we are the only thread to update it,
         // but publishes the updated value for stealers
         idx_t bottom = _bottom.fetch_sub(1, std::memory_order_release);
+        idx_t top    = _top.load(std::memory_order_acquire);
 
-        idx_t top = _top.load(std::memory_order_acquire);
-        //        printf("%lu pop state b:%lu t:%lu\n", id, bottom, t0);
-        T item = {};
+        T item{};
 
         if (likely(bottom - top > 1)) { // More than one job left
-            item = std::move(_arr[(bottom - 1) & mask]);
-            // printf("%lu get job %p at slot %lu (top=%lu)\n", id, item, (bottom - 1) & mask, top);
+            item = std::move(at(bottom - 1));
             assume(item, "poping invalid item");
             return item;
         }
 
-        if (bottom - top
-            == 1) { // Last job in the queue: it could also be extracted concurrently from the other end by steal()
+        if (bottom - top == 1) {
+            // Last job in the queue: it could also be extracted concurrently from the other end by steal()
             // So we also do a kind of steal() here, increasing top with CMPXCHG
             if (_top.compare_exchange_weak(top, top + 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
                 // we were alone incrementing top
-                item = std::move(_arr[(bottom - 1) & mask]);
+                item = std::move(at(bottom - 1)); // Or at(top)
                 assume(item, "poping invalid item");
-                // printf("%lu get job %p at slot %lu (top=%lu)\n", id, item, (bottom - 1) & mask, top);
             }
         }
 
-        // restore bottom
+        // restore bottom to the original value (we either self-stole, or found and empty queue)
         _bottom.store(bottom, std::memory_order_release);
         assert(_bottom == _top, "Unexpected top idx change");
         return item;
@@ -396,24 +409,27 @@ template<typename T, size_t cap_bits> struct work_stealing_queue
     T steal() noexcept
     {
         // Relaxed load since the value will be checked with a CAS
-        idx_t t = _top.load(std::memory_order_relaxed);
+        idx_t t = _top.load(std::memory_order_relaxed); // Will be incremented
         idx_t b = _bottom.load(std::memory_order_acquire);
 
-        //        printf("%lu steal state b:%lu t:%lu\n", id, b, t0);
-
         // The queue not empty if bottom > top. Howerver, we can't test that because we want to tolerate wrapparound of
-        // the counter empty => bottom == top, unless bottom is temporarly decremented by the queue owner inspecting it
+        // the counter.
+        // empty => bottom == top, unless bottom is temporarly decremented by the queue owner inspecting it
         // with pop() in wich case t == b + 1.
         if (t != b && t != b + 1) {
-            // the compare_exchange_weak function serves as a compiler barrier, and guarantees that the read happens
-            // before the CAS.
+            // FIXME: nasty lookahead. We need to move the object before releasing the incremented top, but without the
+            // side effects of moving in case of backtracking.
+            storage_t item_raw = _arr[t & mask];
             if (_top.compare_exchange_weak(t, t + 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-                return std::move(_arr[t & mask]);
+                T& item = reinterpret_cast<T&>(item_raw);
+                assume(item, "Stealed an empty item");
+                return std::move(item);
+            } else {
+                return T{};
             }
         }
 
-        // empty queue
-        return {};
+        return T{};
     }
 
     int approximate_size() const noexcept
@@ -426,7 +442,11 @@ template<typename T, size_t cap_bits> struct work_stealing_queue
 #endif
 
   private:
-    T _arr[capacity]{};
+    T& at(idx_t i) { return reinterpret_cast<T&>(_arr[i & mask]); }
+
+    using storage_t = typename std::aligned_storage<sizeof(T), alignof(T)>::type;
+
+    storage_t _arr[capacity];
     alignas(hardware_destructive_interference_size) std::atomic<idx_t> _bottom{0};
     alignas(hardware_destructive_interference_size) std::atomic<idx_t> _top{0};
 };
@@ -467,18 +487,6 @@ template<typename T, size_t bits = 6> struct scanning_pool_allocator
         pointer p = allocate();
         if (p == nullptr) throw std::bad_alloc();
     }
-
-    bool all_empty() const noexcept
-    {
-        bool res = true;
-        for (const value_type& v : _pool)
-            res &= v.empty();
-        return res;
-    }
-
-    CPP14_CONSTEXPR scanning_pool_allocator() noexcept { assert(all_empty(), "Non empty pool at construction"); }
-
-    ~scanning_pool_allocator() { assert(all_empty(), "Non empty pool at destruction"); }
 
   private:
     static constexpr size_t _mask = size - 1;
@@ -521,6 +529,9 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
         // Return a new reference to the job
         typed<F, jobtoken> token() const { return typed<F, jobtoken>(*this); }
 
+        // Return an upcasted version of the same reference
+        typed<F, jobtoken> astoken() const { return typed<F, jobtoken>(std::move(*this)); }
+
       protected:
         friend class worker;
         friend base_jobslot;
@@ -531,7 +542,8 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
 
         template<typename... Args> void init(Args&&... args)
         {
-            Base::init([](base_jobtoken && token, worker & worker) noexcept {
+            Base::init([](base_jobtoken token, worker & worker) noexcept {
+                assume(token, "Job called with from an empty token");
                 typed<F, ctx> ctx(std::move(token), worker);
                 auto&         functor = ctx.functor();
                 ctx.onfinish();
@@ -549,8 +561,12 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
           : Functor(std::forward<Args>(args)...)
           , _parent(parent)
         {
-            assert(_parent, "Task with empty parent");
+            assume(_parent, "Task with empty parent");
         }
+#ifdef DEBUG
+        // In case the job slot is overwritten
+        ~subtask_functor() { assume(_parent, "Task with empty parent"); }
+#endif
         const jobtoken _parent;
     };
 
@@ -571,8 +587,8 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
 
         template<typename F, typename... Args> void subtask(Args&&... args)
         {
-            _worker.schedule_job(_worker.allocate().template init<1, typed<subtask_functor<F>, jobtoken>>(
-              *this, std::forward<Args>(args)...)[0]);
+            _worker.schedule_job(_worker.allocate().template init<typed<subtask_functor<F>, jobtoken>>(
+              *this, std::forward<Args>(args)...));
         }
 
         template<typename F> void subtask(F&& f) { return subtask<remove_reference_t<F>, F>(std::forward<F>(f)); }
@@ -580,17 +596,17 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
         template<typename F, typename... Args> void schedule(Args&&... args)
         {
             _worker.schedule_job(
-              _worker.allocate().template init<1, typed<F, jobtoken>>(*this, std::forward<Args>(args)...)[0]);
+              _worker.allocate().template init<typed<F, jobtoken>>(*this, std::forward<Args>(args)...));
         }
 
         template<typename F> void schedule(F&& f) { return schedule<remove_reference_t<F>, F>(std::forward<F>(f)); }
 
         template<typename F, typename... Args> typed<subtask_functor<F>, jobtoken> subtask_with_token(Args&&... args)
         {
-            auto tks = _worker.allocate().template init<2, typed<subtask_functor<F>, jobtoken>>(
+            auto tks = _worker.allocate().template init_pair<typed<subtask_functor<F>, jobtoken>>(
               *this, std::forward<Args>(args)...);
-            _worker.schedule_job(std::move(tks[0]));
-            return std::move(tks[1]);
+            _worker.schedule_job(std::move(tks.first));
+            return std::move(tks.second);
         }
 
         template<typename F> typed<subtask_functor<F>, jobtoken> subtask_with_token(F&& f)
@@ -600,9 +616,9 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
 
         template<typename F, typename... Args> typed<F, jobtoken> schedule_with_token(Args&&... args)
         {
-            auto tks = _worker.allocate().template init<2, typed<F, jobtoken>>(*this, std::forward<Args>(args)...);
-            _worker.schedule_job(std::move(tks[0]));
-            return std::move(tks[1]);
+            auto tks = _worker.allocate().template init_pair<typed<F, jobtoken>>(*this, std::forward<Args>(args)...);
+            _worker.schedule_job(std::move(tks.first));
+            return std::move(tks.second);
         }
 
         template<typename F> typed<F, jobtoken> schedule_with_token(F&& f)
@@ -626,10 +642,11 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
     // FIXME: emplace version
     template<typename F> static void start(unsigned ncpu, F&& f)
     {
-        base_jobslot root;
-        auto         tytks = root.template init<1, typed<F, jobtoken>>(std::forward<F>(f));
 
-        sys::run_pinned_worker_pool<worker>(ncpu, std::cref(tytks[0]));
+        base_jobslot root; // Slot holding the main task
+        // This token, held during the lifetime of the work pool, act as a witnedd for the termination of all the tasks
+        const auto token = root.template init<typed<F, jobtoken>>(std::forward<F>(f));
+        sys::run_pinned_worker_pool<worker>(ncpu, std::cref(token));
     }
 
     worker(const jobtoken& root)
@@ -653,7 +670,7 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
             root = jobtoken();
         }
 
-        // Run jobs until only the reference on start()' stack remains
+        // Run jobs until there is only one token reference to the jobslot on start()'s stack frame
         wait_untill([&]() { return root_ref.single_owner(); });
     }
 
@@ -683,13 +700,14 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
             j = _pool.allocate();
             return j != nullptr;
         });
+        assert(j->empty(), "Allocated a non empty job");
         return *j;
     }
 
-    void schedule_job(jobtoken j)
+    void forceinline_fun hot_fun schedule_job(base_jobtoken j)
     {
         wait_untill([&]() {
-            _jobs.push(std::move(j));
+            _jobs.push(j);
             return not(j);
         });
     }
@@ -744,7 +762,7 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
     unsigned                   _nsiblings{};
 
     scanning_pool_allocator<base_jobslot, pool_bits> _pool{};
-    work_stealing_queue<jobtoken, cap_bits>          _jobs{};
+    work_stealing_queue<base_jobtoken, cap_bits>     _jobs{};
 };
 
 } // namespace sched

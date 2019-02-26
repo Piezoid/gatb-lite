@@ -55,19 +55,19 @@ SCENARIO("start wp")
 
     std::atomic<bool> running{true};
 
-    using worker_t = worker<6, 6>;
+    using worker_t = worker<2, 5>;
 
     std::atomic<unsigned> counter{0};
-    const unsigned        target_counts = 3; // std::numeric_limits<unsigned>::max() / 1024;
+    const unsigned        target_counts = 1024 * 1024; // std::numeric_limits<unsigned>::max() / 1024;
 
     // for (unsigned j = 0; j < 1024; j++)
-    worker_t::start(2, [&](worker_t::ctx ctx) {
+    worker_t::start(8, [&](worker_t::ctx ctx) {
         std::cerr << "Started" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         assert(ctx.owners_count() == 2, "%lu", ctx.owners_count());
         for (unsigned i = 0; i < target_counts; i++)
             ctx.subtask([&](worker_t::ctx ctx) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                // std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 counter++;
             });
 
@@ -76,6 +76,7 @@ SCENARIO("start wp")
         // ctx.template subtask<testfunctor>();
         // auto tk = ;
     });
+    std::cerr << "All Done" << std::endl;
 
     CHECK(counter == target_counts);
 }
