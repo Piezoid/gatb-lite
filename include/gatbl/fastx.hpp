@@ -40,8 +40,12 @@ template<typename Record> struct sequence_iterator : private utils::condition_ch
     sequence_iterator(char_iterator it)
       : _record(it)
     {
-        if (unlikely(*it != value_type::header_char)) throw parse_error("Not header found at the start of the file");
+        if (unlikely(*it != value_type::header_char)) {
+            throw parse_error("Not header found at the start of the file");
+        }
     }
+
+    operator char_iterator() { return _record.begin(); }
 
     sequence_iterator(const sequence_iterator&) = default;
     sequence_iterator(sequence_iterator&&)      = default;
@@ -56,12 +60,6 @@ template<typename Record> struct sequence_iterator : private utils::condition_ch
         condition_check::checked();
         return parseok;
     }
-
-    bool operator<(const sequence_iterator& other) const { return operator<(other._record.begin()); }
-
-    bool operator!=(const char_iterator& other) const { return operator<(other); }
-    bool operator!=(const sequence_iterator& other) const { return operator<(other); }
-
     sequence_iterator& operator++()
     {
         condition_check::check();
@@ -74,6 +72,17 @@ template<typename Record> struct sequence_iterator : private utils::condition_ch
     {
         condition_check::check();
         return _record;
+    }
+
+    bool operator<(const sequence_iterator& other) const { return operator<(other._record.begin()); }
+
+    bool operator!=(const char_iterator& other) const { return operator<(other); }
+    bool operator!=(const sequence_iterator& other) const { return operator<(other); }
+
+    // Allow iterator_pair's size to return the size in characters (not records!)
+    friend auto operator-(const char_iterator& end, const sequence_iterator& begin) -> decltype(end - end)
+    {
+        return end - begin._record.begin();
     }
 
   private:
@@ -91,6 +100,9 @@ template<typename Record> struct std::iterator_traits<gatbl::sequence_iterator<R
 };
 
 namespace gatbl {
+
+template<typename Record>
+using sequence_range = iterator_pair<sequence_iterator<Record>, typename Record::char_iterator>;
 
 // FIXME: deprecate these helpers for a more general solution. See make_range() instead
 template<typename Record>
@@ -266,12 +278,13 @@ template<typename CharIt = const char*> class fastq_record : public fasta_record
         p++; // '\n'
 
         // Quality header
-        if (unlikely(p + 1 >= end)) return end;
+        if (unlikely(p + 2 >= end)) return end;
         if (unlikely(*(p++) != '+')) {
             base::set_error("Expected quality header");
             return end;
         }
-        char_iterator newline = find(p, end, '\n'); //, initialized ? p + _quality_header_length : p + 1);
+        char_iterator newline = *(p + 1) == '\n' ? p + 1 : find(p, end, '\n');
+        //, initialized ? p + _quality_header_length : p + 1);
         assert(!contains(p, newline, '\n'), "newline found in quality header");
 
         // Quality follow...
