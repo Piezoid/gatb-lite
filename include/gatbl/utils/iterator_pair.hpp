@@ -46,6 +46,13 @@ template<typename I, typename S = I, typename CI = I> struct iterator_pair
     sentinel _end;
 };
 
+template<typename I, typename S = I, typename CI = I>
+auto
+size(const iterator_pair<I, S, CI>& r) -> decltype(end(r) - begin(r))
+{
+    return end(r) - begin(r);
+}
+
 template<typename I, typename S, typename CI = I>
 inline constexpr iterator_pair<I, S, CI>
 make_range(I begin, S end)

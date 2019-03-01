@@ -2,12 +2,6 @@
 #define RANGES_HPP
 
 #include <cstring>
-#include <utility>
-#include <memory>
-#include <iterator>
-#include <functional>
-#include <algorithm>
-#include <ostream>
 #include "gatbl/utils/concepts.hpp"
 #include "gatbl/utils/compatibility.hpp"
 
