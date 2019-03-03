@@ -10,11 +10,25 @@
 #include <cpuid.h>
 #include <immintrin.h> // for _mm_pause()
 
+#include "signal.h" //FIXME: debug
+
 #include <stdlib.h> // For posix_memalign
 
 #include <sched.h>
 
 #include <iostream>
+
+#include <execinfo.h>
+void
+print_backtrace()
+{
+    void*  array[24];
+    size_t size;
+
+    // get void*'s for all entries on the stack
+    size = backtrace(array, 24);
+    backtrace_symbols_fd(array, size, 2);
+}
 
 #include "catch.hpp"
 #include "gatbl/scheduler.hpp"
@@ -41,14 +55,29 @@ SCENARIO("start wp")
 
     std::atomic<bool> running{true};
 
+    using worker_t = worker<6, 6>;
+
+    std::atomic<unsigned> counter{0};
+    const unsigned        target_counts = 3; // std::numeric_limits<unsigned>::max() / 1024;
+
     // for (unsigned j = 0; j < 1024; j++)
-    wker<>::start(4, [](wker<>::ctx ctx) {
-        for (unsigned i = 0; i < 64; i++)
-            ctx.subtask(
-              [x = ctx.token()](wker<>::ctx ctx) { std::this_thread::sleep_for(std::chrono::milliseconds(6)); });
+    worker_t::start(2, [&](worker_t::ctx ctx) {
+        std::cerr << "Started" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        assert(ctx.owners_count() == 2, "%lu", ctx.owners_count());
+        for (unsigned i = 0; i < target_counts; i++)
+            ctx.subtask([&](worker_t::ctx ctx) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                counter++;
+            });
+
+        std::cerr << "Done" << std::endl;
+
         // ctx.template subtask<testfunctor>();
         // auto tk = ;
     });
+
+    CHECK(counter == target_counts);
 }
 
 /*
