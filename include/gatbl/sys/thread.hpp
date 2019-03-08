@@ -22,6 +22,7 @@ namespace gatbl { namespace sys {
 inline void
 pin_to_cpu(unsigned cpu)
 {
+#ifdef _GNU_SOURCE
     cpu_set_t cpuset;
     pthread_t thread;
 
@@ -32,7 +33,6 @@ pin_to_cpu(unsigned cpu)
     sys::check_ret(pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset), "pthread_setaffinity_np failed");
 
     pthread_yield();
-#ifdef _GNU_SOURCE
     for (unsigned i = 0; sys::check_ret(sched_getcpu(), "sched_getcpu") != cpu; ++i) {
         pthread_yield();
         if (i >= 1024) {
