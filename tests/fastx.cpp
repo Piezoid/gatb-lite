@@ -24,12 +24,12 @@ sequence_iter_test(const R& data, const size_t correct_seq_num = 4, const size_t
     GIVEN("A char range of type " << type_name<R>() << " and a record type " << type_name<record_t>())
     {
 
-        using seqit_t          = sequence_iterator<record_t>;
-        using full_seq_range_t = decltype(make_range(seqit_t(begin(data)), end(data)));
+        using seqit_t     = sequence_iterator<record_t>;
+        using seq_range_t = sequence_range<record_t>;
 
-        GIVEN("A full range sequence iterator iterator: " << type_name<full_seq_range_t>())
+        GIVEN("A full range sequence iterator: " << type_name<seq_range_t>())
         {
-            auto r = make_range(seqit_t(begin(data)), end(data));
+            seq_range_t r = data;
             THEN("Correct number of sequences of correct length are found")
             {
                 size_t n = 0;
@@ -38,15 +38,12 @@ sequence_iter_test(const R& data, const size_t correct_seq_num = 4, const size_t
             }
         }
 
-        using partial_range_t = decltype(make_range(seqit_t(begin(data)), seqit_t(begin(data))));
-
         for (size_t i = 0; i < size(data); ++i) {
-            GIVEN("A range split at the " << i << "th char into " << type_name<partial_range_t>() << " and "
-                                          << type_name<full_seq_range_t>())
+            GIVEN("A range split at the " << i << "th char into two" << type_name<seq_range_t>())
             {
-                seqit_t          mid_point(begin(data) + i, end(data));
-                partial_range_t  part1 = make_range(seqit_t(begin(data)), mid_point);
-                full_seq_range_t part2 = make_range(mid_point, end(data));
+                seqit_t     mid_point(begin(data) + i, end(data));
+                seq_range_t part1{begin(data), mid_point};
+                seq_range_t part2{mid_point, end(data)};
 
                 THEN("Correct number of sequences of correct length are found")
                 {
