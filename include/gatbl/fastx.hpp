@@ -13,36 +13,30 @@ struct parse_error : std::runtime_error
     {}
 };
 
-template<typename Record> struct sequence_iterator : private utils::condition_check
+template<typename Record> class sequence_iterator : private utils::condition_check
 {
-    using char_iterator = typename Record::char_iterator;
-    using range         = iterator_pair<char_iterator>;
-    using value_type    = Record;
+    using char_iterator        = typename Record::char_iterator;
+    using char_iterator_traits = std::iterator_traits<char_iterator>;
+
+  public:
+    using value_type        = Record;
+    using reference         = Record&;
+    using iterator_category = typename char_iterator_traits::iterator_category;
+    using difference_type   = typename char_iterator_traits::difference_type;
+    using pointer           = typename char_iterator_traits::pointer;
 
     /// Initialize an iterator for a sub range of text data: we must first sync to the first header.
-    /// NB: this will skip the first record if begin point exactly at it (first char in header).
-    ///     Because we can't check for a newline preceding it. When random seeking, we need to do this check, since a
-    ///     header char can occur in quality.
     sequence_iterator(const char_iterator& begin, const char_iterator& end)
+      : _record(begin)
     {
-        for (char_iterator p = find(begin, end, '\n'); ++p < end;) {
-            if (*p == value_type::header_char) {
-                _record = {p};
-                return;
-            }
-            p = find(p, end, '\n');
-        }
-
-        _record = {end};
+        _record.sync(end);
     }
 
     /// Initialize an iterator for a complete file: the iterator must point to a sequence.
     sequence_iterator(char_iterator it)
       : _record(it)
     {
-        if (unlikely(*it != value_type::header_char)) {
-            throw parse_error("Not header found at the start of the file");
-        }
+        if (unlikely(*it != value_type::header_char)) { throw parse_error("No header found at the start of the file"); }
     }
 
     operator char_iterator() { return _record.begin(); }
@@ -79,72 +73,25 @@ template<typename Record> struct sequence_iterator : private utils::condition_ch
     bool operator!=(const char_iterator& other) const { return operator<(other); }
     bool operator!=(const sequence_iterator& other) const { return operator<(other); }
 
-    // Allow iterator_pair's size to return the size in characters (not records!)
-    friend auto operator-(const char_iterator& end, const sequence_iterator& begin) -> decltype(end - end)
-    {
-        return end - begin._record.begin();
-    }
-
   private:
     mutable value_type _record;
 };
 
-} // namespace gatbl
-
-template<typename Record> struct std::iterator_traits<gatbl::sequence_iterator<Record>>
-{
-    using value_type        = gatbl::sequence_iterator<Record>;
-    using pointer           = value_type*;
-    using reference         = value_type&;
-    using iterator_category = std::forward_iterator_tag;
-};
-
-namespace gatbl {
-
 template<typename Record>
 using sequence_range = iterator_pair<sequence_iterator<Record>, typename Record::char_iterator>;
-
-// FIXME: deprecate these helpers for a more general solution. See make_range() instead
-template<typename Record>
-inline iterator_pair<sequence_iterator<Record>, typename Record::char_iterator>
-seq_record_range(const typename Record::char_iterator& begin, const typename Record::char_iterator& end)
-{
-    return {begin, end};
-}
-
-template<typename Record, typename Range>
-inline auto
-seq_record_range(const Range& char_range) -> decltype(seq_record_range<Record>(char_range.begin(), char_range.end()))
-{
-    return seq_record_range<Record>(char_range.begin(), char_range.end());
-}
-
-template<typename Record>
-inline iterator_pair<sequence_iterator<Record>, typename Record::char_iterator>
-seq_record_subrange(const typename Record::char_iterator& begin, const typename Record::char_iterator& end)
-{
-    return {sequence_iterator<Record>(begin, end), end};
-}
-
-template<typename Record, typename Range>
-inline auto
-seq_record_subrange(const Range& char_range)
-  -> decltype(seq_record_subrange<Record>(char_range.begin(), char_range.end()))
-{
-    return seq_record_subrange<Record>(char_range.begin(), char_range.end());
-}
 
 template<typename CharIt = const char*, typename std::iterator_traits<CharIt>::value_type HeaderChar = '>'>
 class fasta_record
 {
-    using char_iterator_trais = std::iterator_traits<CharIt>;
-    static_assert(std::is_same<typename char_iterator_trais::iterator_category, std::random_access_iterator_tag>::value,
-                  "Random acces iterator required");
+    using char_iterator_traits = std::iterator_traits<CharIt>;
+    static_assert(
+      std::is_same<typename char_iterator_traits::iterator_category, std::random_access_iterator_tag>::value,
+      "Random acces iterator required");
 
   public:
     using char_iterator = CharIt;
     using substring_t   = iterator_pair<char_iterator>;
-    static_assert(std::is_same<char, typename char_iterator_trais::value_type>::value,
+    static_assert(std::is_same<char, typename char_iterator_traits::value_type>::value,
                   "iterator must yield char values");
     static constexpr char header_char = HeaderChar;
 
@@ -172,12 +119,27 @@ class fasta_record
 
     char_iterator end() const { return _sequence_end; }
 
-  protected:
-    friend sequence_iterator<fasta_record>;
-
-    fasta_record(const char_iterator& it)
+    fasta_record(char_iterator it)
       : _data(it)
-    {}
+    {
+        assume(_data, "no input data");
+    }
+
+    void sync(const char_iterator& end)
+    {
+        char_iterator p = _data;
+        do {
+            if (unlikely(p >= end)) {
+                _data = end;
+                return;
+            }
+            if (*p == header_char) {
+                _data = p;
+                return;
+            }
+            p = find(p, end, '\n') + 1;
+        } while (true);
+    }
 
     bool parse(const char_iterator& end)
     {
@@ -191,6 +153,7 @@ class fasta_record
 
     void next() { this->_data = sequence().end() + 1 /* '\n' */; }
 
+  protected:
     void set_error(const char* e) noexcept
     {
         assume(error == nullptr, "no error set");
@@ -206,10 +169,9 @@ class fasta_record
     }
 
     /// Returns an iterator to the last parsed char
-    char_iterator _parse(const char_iterator& end)
+    char_iterator _parse_header(const char_iterator& end)
     {
-        assume(_data && _data <= end, "no input data");
-        const char* p = begin();
+        char_iterator p = begin();
 
         // Sequence header
         if (unlikely(p + 1 >= end)) return end;
@@ -217,12 +179,20 @@ class fasta_record
             set_error("Expected header");
             return end;
         }
-        const char* newline  = find(p, end, '\n');
-        _sequence_header_end = newline;
+        char_iterator newline = find(p, end, '\n');
+        _sequence_header_end  = newline;
         assert(!contains(p, newline, '\n'), "newline found in header");
 
+        return newline;
+    }
+
+    /// Returns an iterator to the last parsed char
+    char_iterator _parse(const char_iterator& end)
+    {
+        // Sequence Header
+        char_iterator newline = _parse_header(end);
         // Sequence
-        p = newline + 1; // skip '\n'
+        char_iterator p = newline + 1; // skip '\n'
         if (unlikely(p >= end)) return end;
         if (unlikely(*p == '\n')) {
             set_error("Empty sequence");
@@ -254,8 +224,21 @@ template<typename CharIt = const char*> class fastq_record : public fasta_record
 
     char_iterator end() const { return quality().end(); }
 
-  protected:
-    friend sequence_iterator<fastq_record>;
+    void sync(const char_iterator& end)
+    {
+        base::sync(end);
+        char_iterator p = base::begin();
+        // Checks if the next line also starts with an '@'
+        p = find(p, end, '\n') + 1;
+        if (unlikely(p >= end)) {
+            base::_data = end;
+            return;
+        }
+        if (*p == base::header_char) {
+            // In which case we were on a quality starting with '@' and the header is the next line:
+            base::_data = p;
+        }
+    }
 
     bool parse(const char_iterator end)
     {
@@ -284,7 +267,6 @@ template<typename CharIt = const char*> class fastq_record : public fasta_record
             return end;
         }
         char_iterator newline = *(p + 1) == '\n' ? p + 1 : find(p, end, '\n');
-        //, initialized ? p + _quality_header_length : p + 1);
         assert(!contains(p, newline, '\n'), "newline found in quality header");
 
         // Quality follow...
