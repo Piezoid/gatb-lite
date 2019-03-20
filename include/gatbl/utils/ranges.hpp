@@ -69,7 +69,6 @@ template<typename Range> using reference_t        = decltype(*begin(std::declval
 template<typename Range> using const_reference_t  = decltype(*begin(std::declval<const Range&>()));
 template<typename Range> using value_t            = remove_reference_t<reference_t<Range>>;
 
-// [string.view.io], Inserters and extractors
 template<typename R, typename Traits, typename = decltype(concepts::CStringRange<const R>)>
 inline std::basic_ostream<char, Traits>&
 operator<<(std::basic_ostream<char, Traits>& os, const R& s)
@@ -80,9 +79,9 @@ operator<<(std::basic_ostream<char, Traits>& os, const R& s)
 /// Find specialization for char like types
 template<typename T, typename = enable_if_t<sizeof(T) == 1>>
 inline T*
-find(T* first, T* last, const remove_const_t<T>& v)
+find(T* first, T* last, T v)
 {
-    T* p = static_cast<T*>(memchr(first, reinterpret_cast<const int&>(v), last - first));
+    T* p = static_cast<T*>(memchr(first, reinterpret_cast<int>(v), last - first));
     return likely(p != nullptr) ? p : last;
 }
 
