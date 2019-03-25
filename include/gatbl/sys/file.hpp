@@ -148,7 +148,10 @@ struct file_descriptor : public bound_cursor
     void advise(int advise, off_t offset = 0, off_t len = 0)
     {
         if (offset == 0 && len == 0) { len = off_t(this->size()); }
+
+#ifdef POSIX_FADV_SEQUENTIAL
         sys::check_ret(::posix_fadvise(_fd, offset, len, advise), "posix_fadvise");
+#endif
     }
 
     template<typename T = byte>
@@ -175,11 +178,17 @@ struct file_descriptor : public bound_cursor
         return read_size;
     }
 
+#ifdef __linux__
     size_t readahead(off64_t offset, size_t count) const
     {
         return sys::check_ret(::readahead(_fd, offset, count), "readahead");
     }
-
+#else
+     size_t readahead(off_t offset, size_t count) const
+     {
+        return 0;
+     }
+#endif
     void close()
     {
         if (_fd >= 0) { sys::check_ret(::close(_fd), "close"); }

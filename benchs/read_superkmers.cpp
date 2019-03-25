@@ -18,8 +18,10 @@ process_fastq(std::string filename, F&& callback)
     sys::file_descriptor fd(filename);
     auto data = fd.mmap<const char>();
     // FIXME: those are optional but we really want to knwow if they work for testing
+#ifdef __linux__
     assert(data.advise_hugepage());
     assert(data.advise_sequential());
+#endif
     for (auto& rec : seq_record_subrange<fastq_record<const char*>>(data)) {
         callback(rec);
     }

@@ -743,7 +743,7 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
             assert(_jobs.approximate_size() == 0, "Asked to steal while we still have local jobs");
 
         // If this is the second *steal* try, we yield to the OS before retry
-        if (state > 1) pthread_yield();
+        if (state > 1) sched_yield();
 
         // If poping from our queue failed, we steal from other workers (in locality order)
         for (unsigned i = 0; i < _nsiblings; i++) {
