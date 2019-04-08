@@ -16,6 +16,10 @@
 #include "gatbl/sys/thread.hpp"
 
 namespace gatbl {
+
+// Forward declaration for parallel_range_functor
+template<typename R> struct default_splitter;
+
 namespace memory {
 
 /// Wrapper of a T that might be allocated on heap if it is larger than max_size
@@ -494,6 +498,60 @@ template<typename T, size_t bits = 6> struct scanning_pool_allocator
     size_t                  _idx = 0;
 };
 
+namespace details {
+
+template<typename Worker, typename F, typename R, typename Splitter = default_splitter<R>>
+struct parallel_for_functor
+  : protected Splitter
+  , public F
+{
+    using typename Splitter::iterator;
+    using typename Splitter::sentinel;
+    using jobtoken = typename Worker::jobtoken;
+
+    template<typename... Args,
+             typename _Splitter,
+             typename = enable_if_t<std::is_constructible<Splitter, _Splitter&&>::value
+                                    && std::is_constructible<F, Args&&...>::value>>
+    parallel_for_functor(R& range, _Splitter&& splitter, const jobtoken& parent, Args&&... args)
+      : Splitter(std::forward<_Splitter>(splitter))
+      , F(std::forward<Args>(args)...)
+      , _begin(begin(range))
+      , _end(end(range))
+      , _parent(parent)
+    {}
+
+    template<typename Ctx> void operator()(Ctx ctx)
+    {
+        iterator midpoint = Splitter::split(_begin, _end);
+        while (midpoint != _end) {
+            ctx.template schedule<parallel_for_functor>(*this, midpoint, ctx);
+            _end     = midpoint;
+            midpoint = Splitter::split(_begin, _end);
+        }
+
+        F::operator()(Splitter::make_range(_begin, _end), std::move(ctx));
+    }
+
+    parallel_for_functor(parallel_for_functor&&)      = delete;
+    parallel_for_functor(const parallel_for_functor&) = delete;
+
+    parallel_for_functor(parallel_for_functor& from, iterator midpoint, const jobtoken& parent)
+      : Splitter(from)
+      , F(from) // Copy user functor
+      , _begin(midpoint)
+      , _end(from._end)
+      , _parent(parent) // Inc. refcount
+    {}
+
+  protected:
+    iterator _begin;
+    sentinel _end;
+    jobtoken _parent;
+};
+
+} /* namespace details */
+
 /**
  * A worker, with a start() static method for initiating a worker pool executing subtasks spawn from a single root task.
  *
@@ -585,71 +643,113 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
         // Return a new reference to the job
         jobtoken token() const { return jobtoken(*this); }
 
-        template<typename F, typename... Args> void subtask(Args&&... args)
+        template<typename P> forceinline_fun void wait_untill(P&& predicate)
         {
-            _worker.schedule_job(_worker.allocate().template init<typed<subtask_functor<F>, jobtoken>>(
-              *this, std::forward<Args>(args)...));
+            _worker.wait_untill(std::forward<P>(predicate));
         }
 
-        template<typename F> void subtask(F&& f) { return subtask<remove_reference_t<F>, F>(std::forward<F>(f)); }
+        void wait_token(const jobtoken& tk)
+        {
+            wait_untill([&]() { return tk.signle_owner(); });
+        }
+
+        template<typename Lockable> std::unique_lock<Lockable> lock(Lockable& m)
+        {
+            std::unique_lock<Lockable> ulock(m, std::defer_lock_t{});
+            wait_untill([&]() { return ulock.try_lock(); });
+            return ulock;
+        }
 
         template<typename F, typename... Args> void schedule(Args&&... args)
         {
-            _worker.schedule_job(
-              _worker.allocate().template init<typed<F, jobtoken>>(*this, std::forward<Args>(args)...));
-        }
-
-        template<typename F> void schedule(F&& f) { return schedule<remove_reference_t<F>, F>(std::forward<F>(f)); }
-
-        template<typename F, typename... Args> typed<subtask_functor<F>, jobtoken> subtask_with_token(Args&&... args)
-        {
-            auto tks = _worker.allocate().template init_pair<typed<subtask_functor<F>, jobtoken>>(
-              *this, std::forward<Args>(args)...);
-            _worker.schedule_job(std::move(tks.first));
-            return std::move(tks.second);
-        }
-
-        template<typename F> typed<subtask_functor<F>, jobtoken> subtask_with_token(F&& f)
-        {
-            return subtask_with_token<remove_reference_t<F>, F>(std::forward<F>(f));
+            base_jobslot* j = _worker._pool.allocate();
+            if (unlikely(j == nullptr)) {
+                // Set up a job on the stack for synchronous execution
+                F functor(std::forward<Args>(args)...);
+                functor(typed<F, ctx>(this->token(), _worker));
+                return;
+            }
+            auto tk = j->template init<typed<F, jobtoken>>(std::forward<Args>(args)...);
+            _worker._jobs.push(tk);
+            if (unlikely(tk)) tk.run(_worker);
         }
 
         template<typename F, typename... Args> typed<F, jobtoken> schedule_with_token(Args&&... args)
         {
-            auto tks = _worker.allocate().template init_pair<typed<F, jobtoken>>(*this, std::forward<Args>(args)...);
-            _worker.schedule_job(std::move(tks.first));
+            base_jobslot* j = nullptr;
+            wait_untill([&]() {
+                j = _worker._pool.allocate();
+                return j != nullptr;
+            });
+            auto tks = j->template init_pair<typed<F, jobtoken>>(std::forward<Args>(args)...);
+            _worker._jobs.push(tks.first);
+            if (unlikely(tks.first)) tks.first.run(_worker);
             return std::move(tks.second);
         }
+
+        template<typename F> void schedule(F&& f) { return schedule<remove_reference_t<F>, F>(std::forward<F>(f)); }
 
         template<typename F> typed<F, jobtoken> schedule_with_token(F&& f)
         {
             return schedule_with_token<remove_reference_t<F>, F>(std::forward<F>(f));
         }
 
-        template<typename P> forceinline_fun void wait_untill(P&& predicate)
+        template<typename F, typename... Args> void subtask(Args&&... args)
         {
-            _worker.wait_untill(std::forward<P>(predicate));
+            schedule<subtask_functor<F>>(*this, std::forward<Args>(args)...);
+        }
+
+        template<typename F, typename... Args> typed<subtask_functor<F>, jobtoken> subtask_with_token(Args&&... args)
+        {
+            return schedule_with_token<subtask_functor<F>>(*this, std::forward<Args>(args)...);
+        }
+
+        template<typename F> void subtask(F&& f) { subtask<remove_reference_t<F>, F>(std::forward<F>(f)); }
+        template<typename F> typed<subtask_functor<F>, jobtoken> subtask_with_token(F&& f)
+        {
+            return subtask_with_token<remove_reference_t<F>, F>(std::forward<F>(f));
+        }
+
+        /// Given a range of type R, split it recursively using the Splitter(SplitterArg) and spawn a job calling the
+        /// functor F on each parts (whose type is defined by Splitter)
+        template<typename F, typename R, typename Splitter = default_splitter<R>, typename SplitterArg = size_t>
+        void parallel_for(R& range, SplitterArg&& size, F&& f)
+        {
+            using functor = details::parallel_for_functor<worker, remove_reference_t<F>, R, Splitter>;
+            schedule<functor>(range, std::forward<SplitterArg>(size), *this, std::forward<F>(f));
+        }
+
+        template<typename F, typename R, typename Splitter = default_splitter<R>, typename SplitterArg = size_t>
+        jobtoken parallel_for_with_token(R& range, SplitterArg&& size, F&& f)
+        {
+            using functor = details::parallel_for_functor<worker, remove_reference_t<F>, R, Splitter>;
+            return schedule_with_token<functor>(range, std::forward<SplitterArg>(size), *this, std::forward<F>(f));
         }
 
       private:
         worker& _worker;
     };
 
+    // FIXME: find a better way of managing the lifetime of Workers...
     jobtoken root; // Token to the root job, only live during the time between construction and execution of the worker.
-    const jobtoken& root_ref; // Reference to the token on the stack of the thread starting the worker pool, live for
-                              // the whole work pool lifetime
+    const jobtoken& root_ref; // Reference to the token on the stack of the thread starting the worker pool, alive for
+                              // the whole work pool lifetime, allowing to check if the root job is finished
 
-    // FIXME: emplace version
-    template<typename F> static void start(unsigned ncpu, F&& f)
+    template<typename F, typename... Args> static void start(unsigned ncpu, Args&&... args)
     {
 
         base_jobslot root; // Slot holding the main task
         // This token, held during the lifetime of the work pool, act as a witnedd for the termination of all the tasks
-        const auto token = root.template init<typed<F, jobtoken>>(std::forward<F>(f));
+        const auto token = root.template init<typed<F, jobtoken>>(std::forward<Args>(args)...);
         sys::run_pinned_worker_pool<worker>(ncpu, std::cref(token));
     }
 
-    worker(const jobtoken& root)
+    template<typename F> static void start(unsigned ncpu, F&& f)
+    {
+        start<remove_reference_t<F>, F>(ncpu, std::forward<F>(f));
+    }
+
+    explicit worker(const jobtoken& root)
       : root(root)
       , root_ref(root)
       , _tid(std::this_thread::get_id())
@@ -670,7 +770,7 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
             root = jobtoken();
         }
 
-        // Run jobs until there is only one token reference to the jobslot on start()'s stack frame
+        // Run jobs until there is only a single token referencing to the jobslot on start()'s stack frame
         wait_untill([&]() { return root_ref.single_owner(); });
     }
 
@@ -693,28 +793,9 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
         }
     }
 
-    base_jobslot& allocate() noexcept
-    {
-        base_jobslot* j = nullptr;
-        wait_untill([&]() {
-            j = _pool.allocate();
-            return j != nullptr;
-        });
-        assert(j->empty(), "Allocated a non empty job");
-        return *j;
-    }
-
-    void forceinline_fun hot_fun schedule_job(base_jobtoken j)
-    {
-        wait_untill([&]() {
-            _jobs.push(j);
-            return not(j);
-        });
-    }
-
     template<typename P> forceinline_fun void wait_untill(P&& predicate)
     {
-        assert(check_owner(), "worker.get_job called from the wrong thread");
+        assert(check_owner(), "worker.wait_untill called from the wrong thread");
 
         if (predicate())
             return;
