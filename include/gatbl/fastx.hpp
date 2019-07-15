@@ -80,6 +80,31 @@ template<typename Record> class sequence_iterator : private utils::condition_che
 template<typename Record>
 using sequence_range = iterator_pair<sequence_iterator<Record>, typename Record::char_iterator>;
 
+template<typename Record>
+class default_splitter<sequence_range<Record>> : public default_splitter<iterator_pair<typename Record::char_iterator>>
+{
+    using base = default_splitter<iterator_pair<typename Record::char_iterator>>;
+
+  public:
+    using base::base;
+    using typename base::iterator;
+    using typename base::sentinel;
+    iterator split(iterator beg, sentinel end)
+    {
+        size_t dist = distance(beg, end);
+        if (dist > base::_size) {
+            advance(beg, dist / 2);
+            Record rec{beg};
+            rec.sync(end);
+            return begin(rec);
+        } else {
+            return end;
+        }
+    }
+
+    sequence_range<Record> make_range(iterator beg, sentinel end) { return {beg, end}; }
+};
+
 template<typename CharIt = const char*, typename std::iterator_traits<CharIt>::value_type HeaderChar = '>'>
 class fasta_record
 {
