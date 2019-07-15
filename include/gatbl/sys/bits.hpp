@@ -1,17 +1,18 @@
-#ifndef BITS_HPP
-#define BITS_HPP
+#ifndef GATBL_BITS_HPP
+#define GATBL_BITS_HPP
 
 #include "gatbl/common.hpp"
 #include <climits>
 #include <cstdint>
 #include <limits>
 #include <utility>
+#include <algorithm>
 
 #include "gatbl/utils/ranges.hpp"
 
 namespace gatbl::concepts {
 
-template<typename T, typename Res_t = T> using if_unsigned_t = typename std::enable_if<(T(-1) > T(0)), Res_t>::type;
+template<typename T, typename Res_t = T> using if_unsigned_t = enable_if_t<(T(-1) > T(0)), Res_t>;
 
 template<typename T> auto Unsigned(T) -> if_unsigned_t<T>;
 
@@ -97,7 +98,7 @@ union splited_int128_t
 
 inline CPP14_CONSTEXPR __uint128_t
                        bswap(__uint128_t v)
-{
+{ // FIXME:: use suffle
     splited_int128_t s{v};
     uint64_t         tmp = bswap(s.splited[0]);
     s.splited[0]         = bswap(s.splited[1]);
@@ -160,18 +161,110 @@ split_bitoffset(size_t n)
     return {word_shift, bit_shift};
 }
 
-/// Round up to next power of two
-inline CPP14_CONSTEXPR size_t
-                       clp2(size_t v)
+inline constexpr bool
+parity(unsigned int v)
 {
-    constexpr size_t one = 1;
-    return v > one ? one << (bitwidth<size_t>() - size_t(__builtin_clzll(v - 1))) : v;
+    return __builtin_parity(v) == 1;
 }
 
-inline constexpr size_t
-const_log2(size_t n)
+inline constexpr bool
+parity(unsigned long v)
 {
-    return ((n < 2) ? 1 : 1 + const_log2(n / 2));
+    return __builtin_parityl(v) == 1;
+}
+
+inline constexpr bool
+parity(unsigned long long v)
+{
+    return __builtin_parityll(v) == 1;
+}
+
+/// Returns true for odd parity
+template<typename R>
+inline CPP14_CONSTEXPR auto
+parity(const R& r) -> decltype(concepts::type_require<bool>(concepts::UnsignedRange(r)))
+{
+    bool p = false;
+    for (const auto& v : r) {
+        p = p != parity(v);
+    }
+    return p;
+}
+
+inline CPP14_CONSTEXPR size_t
+                       clz(unsigned int x)
+{
+    return uint8_t(__builtin_clz(x));
+}
+
+inline CPP14_CONSTEXPR size_t
+                       clz(unsigned long x)
+{
+    return uint8_t(__builtin_clzl(x));
+}
+
+inline CPP14_CONSTEXPR size_t
+                       clz(unsigned long long x)
+{
+    return uint8_t(__builtin_clzll(x));
+}
+
+/// CLZ for uint smaller than 32 bits
+template<typename T>
+inline CPP14_CONSTEXPR auto
+clz(T x) -> std::enable_if_t<sizeof(T) < sizeof(unsigned int), decltype(clz(static_cast<unsigned int>(x)))>
+{
+
+    auto         lz         = clz(static_cast<unsigned int>(x));
+    decltype(lz) delta_bits = CHAR_BIT * (sizeof(unsigned int) - sizeof(T));
+    assume(lz >= delta_bits, "Less leading zeros than expected");
+    return lz - delta_bits;
+}
+
+template<typename T>
+inline CPP14_CONSTEXPR auto
+clz(T x)
+  -> std::enable_if_t<(sizeof(T) > sizeof(unsigned long long)) && sizeof(T) % sizeof(unsigned long long) == 0, unsigned>
+{
+    constexpr size_t n = sizeof(T) / sizeof(unsigned long long);
+
+    auto   y      = reinterpret_cast<unsigned long long(&)[n]>(x);
+    size_t result = 0;
+    for (size_t i = n; i-- > 0;) {
+        if (y[i] == 0)
+            result += sizeof(T) * CHAR_BIT;
+        else {
+            result += clz(y[i]);
+            break;
+        }
+    }
+    return result;
+}
+
+/// Returns the log2 rounded up
+template<typename T>
+inline CPP14_CONSTEXPR auto
+ilog2(const T& v) -> decltype(bitwidth<T>() - clz(v - 1))
+{
+    constexpr T one = 1;
+    return v > one ? bitwidth<T>() - clz(v - T(1u)) : 0;
+}
+
+/// Returns the log2(x+1) rounded up, this is the number of bits required to store the number
+template<typename T>
+inline CPP14_CONSTEXPR auto
+ilog2p1(const T& v) -> decltype(bitwidth<T>() - clz(v))
+{
+    constexpr T one = 1;
+    return v > one ? bitwidth<T>() - clz(v) : 1;
+}
+
+/// Round up to next power of two, greater or equal to the input
+template<typename T>
+inline CPP14_CONSTEXPR auto
+clp2(size_t v) -> decltype(T(ilog2(v)))
+{
+    return T(1) << ilog2(v);
 }
 
 template<typename R>
@@ -348,7 +441,7 @@ bitmask(size_t n, size_t pos = 0)
     constexpr size_t bits = bitwidth<T>();
     assume(n <= bits, "n=%lu > bitwidth=%lu", n, bitwidth<T>());
     assume(pos + n <= bits, "pos=%lu + n=%lu > bitwidth=%lu", pos, n, bitwidth<T>());
-    return (~T(0) >> (bits - n)) << pos;
+    return (T(-1) >> (bits - n)) << pos;
 }
 
 /// A bitmask assuming parameters for unclipped output
@@ -361,7 +454,7 @@ bitmask_unclipped(size_t n, size_t pos = 0)
     assume(n <= bits, "mask weight's %lu > capacity=%lu", n, bits);
     assume(pos < bits, "pos=%lu >= capacity%lu", pos, bits);
     assume(n + pos <= bits, "pos+weight=%lu > capacity=%lu", n + pos, bits);
-    return (~T(0) >> (bits - n)) << pos;
+    return (T(-1) >> (bits - n)) << pos;
 }
 
 template<typename T>
@@ -502,36 +595,6 @@ tile_bitgroup(T v) -> concepts::if_unsigned_t<T>
     return v;
 }
 
-inline constexpr bool
-parity(unsigned int v)
-{
-    return __builtin_parity(v) == 1;
-}
-
-inline constexpr bool
-parity(unsigned long v)
-{
-    return __builtin_parityl(v) == 1;
-}
-
-inline constexpr bool
-parity(unsigned long long v)
-{
-    return __builtin_parityll(v) == 1;
-}
-
-/// Returns true for odd parity
-template<typename R>
-inline CPP14_CONSTEXPR auto
-parity(const R& r) -> decltype(concepts::type_require<bool>(concepts::UnsignedRange(r)))
-{
-    bool p = false;
-    for (const auto& v : r) {
-        p = p != parity(v);
-    }
-    return p;
-}
-
 } // namespace gatbl::bits
 
-#endif // BITS_HPP
+#endif // GATBL_BITS_HPP
