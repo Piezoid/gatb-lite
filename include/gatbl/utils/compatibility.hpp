@@ -9,10 +9,15 @@
 #include <type_traits>
 #include <memory>
 
+#include "gatbl/utils/concepts.hpp"
+
 namespace gatbl {
 
 using std::begin;
 using std::end;
+
+using std::advance;
+using std::distance;
 
 #if __cplusplus >= 201402L
 using std::cbegin;
@@ -24,10 +29,15 @@ using std::rend;
 
 using std::make_unique;
 
+// Type alias for *::type
+using std::conditional_t;
 using std::enable_if_t;
 using std::make_unsigned_t;
 using std::remove_const_t;
 using std::remove_reference_t;
+
+// Constexpr alias for *::value
+using std::is_same_v;
 
 #    define CPP14_CONSTEXPR constexpr
 
@@ -107,50 +117,28 @@ crend(const T (&arr)[N])
     return {arr};
 }
 
-namespace details {
-template<class T> struct Unique_if
-{
-    using Single_object = std::unique_ptr<T>;
-};
-
-template<class T> struct Unique_if<T[]>
-{
-    using Unknown_bound = std::unique_ptr<T[]>;
-};
-
-template<class T, size_t N> struct Unique_if<T[N]>
-{
-    using Known_bound = void;
-};
-}
-
 template<class T, class... Args>
-typename details::Unique_if<T>::Single_object
+std::unique_ptr<typename concepts::extent_kind<T>::single_object>
 make_unique(Args&&... args)
 {
     return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
 }
 
 template<class T>
-typename details::Unique_if<T>::Unknown_bound
+std::unique_ptr<typename concepts::extent_kind<T>::unknown_bound_array[]>
 make_unique(size_t n)
 {
     typedef typename std::remove_extent<T>::type U;
     return std::unique_ptr<T>(new U[n]());
 }
 
-template<class T, class... Args>
-typename details::Unique_if<T>::Known_bound
-make_unique(Args&&...)
-  = delete;
+template<class T> using remove_const_t                 = typename std::remove_const<T>::type;
+template<class T> using remove_reference_t             = typename std::remove_reference<T>::type;
+template<class T> using make_unsigned_t                = typename std::make_unsigned<T>::type;
+template<bool B, class T = void> using enable_if_t     = typename std::enable_if<B, T>::type;
+template<bool I, class T, class E> using conditional_t = typename std::conditional_t<I, T, E>::type;
 
-template<class T> using remove_const_t = typename std::remove_const<T>::type;
-
-template<class T> using remove_reference_t = typename std::remove_reference<T>::type;
-
-template<class T> using make_unsigned_t = typename std::make_unsigned<T>::type;
-
-template<bool B, class T = void> using enable_if_t = typename std::enable_if<B, T>::type;
+template<typename T, typename U> inline constexpr bool is_same_v = is_same<T, U>::value;
 
 #    define CPP14_CONSTEXPR
 
@@ -158,12 +146,14 @@ template<bool B, class T = void> using enable_if_t = typename std::enable_if<B, 
 
 #if __cplusplus >= 201703L
 using std::byte;
+using std::conjunction;
 using std::empty;
 using std::size;
 
 #    define RANGES_FOR(VAR_DECL, ...) for (VAR_DECL : (__VA_ARGS__))
 #    define CPP17_NOEXCEPT noexcept
 #    define CPP17_STATIC_INLINE_VAR inline
+#    define CPP17_IF_CONSTEXPR if constexpr
 
 #else
 template<typename C>
@@ -212,6 +202,8 @@ enum class byte : unsigned char {};
 #define CPP17_NOEXCEPT
 
 #define CPP17_STATIC_INLINE_VAR extern weak_sym
+
+#define CPP17_IF_CONSTEXPR if
 
 #endif // __cplusplus >= 201402L
 

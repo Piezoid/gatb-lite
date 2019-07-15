@@ -36,7 +36,7 @@ template<typename Record> class sequence_iterator : private utils::condition_che
     sequence_iterator(char_iterator it)
       : _record(it)
     {
-        if (unlikely(*it != value_type::header_char)) { throw parse_error("No header found at the start of the file"); }
+        _record.check_sync();
     }
 
     operator char_iterator() { return _record.begin(); }
@@ -186,6 +186,13 @@ class fasta_record
     {
         assume(_data, "no input data");
     }
+
+    void check_sync() const
+    {
+        if (unlikely(_data == nullptr || *_data != header_char)) {
+            throw parse_error("No header found at the start of the file");
+        }
+    };
 
     void sync(const char_iterator& end)
     {

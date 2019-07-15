@@ -1,11 +1,12 @@
-#ifndef COMMON_HPP
-#define COMMON_HPP
+#ifndef GATBL_COMMON_HPP
+#define GATBL_COMMON_HPP
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstdarg>
 #include <exception>
 
+#define packed_layout __attribute__((__packed__))
 #define noinline_fun __attribute__((noinline))
 #define forceinline_fun inline __attribute__((always_inline))
 #define flatten_fun __attribute__((flatten))
@@ -59,7 +60,7 @@ namespace gatbl {
  * Do not throw exception on purpose (directly terminate)
  */
 noreturn_attr noinline_fun inline void
-              abort_message(const char msg[]...)
+              abort_message(const char* msg...)
 {
     va_list args;
     va_start(args, msg);
@@ -71,10 +72,10 @@ noreturn_attr noinline_fun inline void
 
 }
 
-#    define __gatbl_sourceloc_fail(what, msg, ...) gatbl::abort_message("%s:%s:%u: " #what " failed: " #msg "\n", __FILE__, __PRETTY_FUNCTION__, __LINE__, ##__VA_ARGS__))
+#    define __gatbl_sourceloc_fail(what, msg, ...) gatbl::abort_message("%s:%u %s\n\t" #what " failed: " #msg "\n", __FILE__, __LINE__, static_cast<const char*>(__PRETTY_FUNCTION__), ##__VA_ARGS__))
 #    define assert(expr, ...) (likely((expr)) ? static_cast<void>(0) : __gatbl_sourceloc_fail("Assertion '" #expr "'", ##__VA_ARGS__)
 #    define assume(expr, ...) (likely((expr)) ? static_cast<void>(0) : __gatbl_sourceloc_fail("Assumption '" #expr "'", ##__VA_ARGS__)
 
 #endif
 
-#endif // COMMON_HPP
+#endif // GATBL_COMMON_HPP

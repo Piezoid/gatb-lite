@@ -24,6 +24,14 @@ template<typename T, typename Tag> class empty_base : private Tag
       : Tag(std::forward<_Tag>(tag))
       , _value(std::forward<_T>(value))
     {}
+    template<typename Arg1,
+             typename... Args,
+             typename = enable_if_t<std::is_constructible<T, Arg1, Args...>::value
+                                    && !std::is_constructible<Tag, Args...>::value>>
+    empty_base(Arg1&& arg1, Args&&... args)
+      : Tag()
+      , _value(std::forward<Arg1>(arg1), std::forward<Args>(args)...)
+    {}
     Tag&              tag() { return *this; }
     const Tag&        tag() const { return *this; }
     const value_type& value() const noexcept { return _value; }
