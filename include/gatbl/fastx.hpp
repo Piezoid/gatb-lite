@@ -105,6 +105,43 @@ class default_splitter<sequence_range<Record>> : public default_splitter<iterato
     sequence_range<Record> make_range(iterator beg, sentinel end) { return {beg, end}; }
 };
 
+template<typename CharIt = const char*> struct line_record : iterator_pair<CharIt>
+{
+    using char_iterator = CharIt;
+    using substring_t   = iterator_pair<char_iterator>;
+
+    line_record(CharIt it)
+      : substring_t(it, it)
+    {
+        assume(it, "no input data");
+    }
+
+    void check_sync() const {};
+
+    void sync(CharIt end)
+    {
+        CharIt it = find(substring_t::begin(), end, '\n');
+        if (it != end && ++it != end) { // skip '\n'
+            substring_t::operator=({it, find(it, end, '\n')});
+        } else {
+            substring_t::operator=({end, end});
+        }
+    }
+
+    bool parse(CharIt end)
+    {
+        CharIt it = substring_t::begin();
+        if (it != end && (unlikely(*it != '\n') || ++it != end)) { // skip '\n'
+            substring_t::operator=({it, find(it, end, '\n')});
+            return substring_t::end() != end;
+        } else {
+            return false;
+        }
+    }
+
+    void next() { substring_t::operator=({substring_t::end(), substring_t::end()}); }
+};
+
 template<typename CharIt = const char*, typename std::iterator_traits<CharIt>::value_type HeaderChar = '>'>
 class fasta_record
 {
