@@ -27,8 +27,6 @@ noreturn_attr noinline_fun inline cold_fun void
     int size = vsnprintf(nullptr, 0, fmt, args);
     if (size < 0) { std::terminate(); }
     _what.resize(static_cast<size_t>(size));
-    int size2 = vsnprintf(&_what.front(), _what.size() + 1, fmt, args);
-    if (size2 != size) { std::terminate(); }
 
     throw std::system_error(errcode, std::generic_category(), _what);
 }
