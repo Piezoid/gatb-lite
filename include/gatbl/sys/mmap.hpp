@@ -50,8 +50,12 @@ template<typename T> class mmap_range : public unique_range<T, details::munmappe
                off_t              offset = 0)
       : base()
     {
+        if (len == 0) {
+            *this = base(nullptr, 0, {});
+            return;
+        }
         const size_t bytes = details::munmapper<T>::size_to_bytes(len);
-        T*           ptr   = reinterpret_cast<T*>(::mmap(addr, bytes, prot, flags, fd, offset));
+        auto*        ptr   = reinterpret_cast<T*>(::mmap(addr, bytes, prot, flags, fd, offset));
         if (likely(ptr != MAP_FAILED)) {
             *this = base(ptr, len, {});
         } else {

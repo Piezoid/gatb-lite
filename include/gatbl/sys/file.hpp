@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 
 #include "gatbl/utils/compatibility.hpp"
+#include "gatbl/utils/iterator_pair.hpp"
 #include "gatbl/sys/exceptions.hpp"
 #include "gatbl/sys/mmap.hpp"
 
@@ -53,7 +54,7 @@ struct bound_cursor
   : public sized
   , public cursor
 {
-    bool done() const noexcept { return tell() >= size(); }
+    bool eof() const noexcept { return tell() >= size(); }
 
     /// We use a user-space position since async read don't use the native file descriptor position
     size_t seek(off_t offset, int whence = SEEK_SET)
@@ -81,8 +82,8 @@ struct bound_cursor
 
 struct file_descriptor : public bound_cursor
 {
-    file_descriptor(const std::string& path, int flags = O_RDONLY)
-      : file_descriptor(sys::check_ret(::open(path.c_str(), flags), "open"))
+    file_descriptor(const std::string& path, int flags = O_RDONLY, mode_t mode = S_IRUSR | S_IWUSR)
+      : file_descriptor(sys::check_ret(::open(path.c_str(), flags, mode), "open"))
     {}
 
     file_descriptor(file_descriptor&& from) noexcept
@@ -165,17 +166,38 @@ struct file_descriptor : public bound_cursor
         return mmap_range<T>(_fd, len, prot, flags, addr, offset);
     }
 
-    template<typename Buffer> size_t pread(Buffer buf, off_t offset) const
+    template<typename Buffer>
+    auto pread(Buffer& buf, off_t offset) -> decltype(concepts::type_require<size_t>(as_bytes(buf)))
     {
-        const auto buf_bytes = buf.asbytes();
-        return sys::check_ret(::pread(_fd, buf_bytes.begin(), buf_bytes.size(), offset), "pread");
+        using gatbl::as_bytes;
+        using gatbl::size;
+        const auto buf_bytes = as_bytes(buf);
+        return sys::check_ret(::pread(_fd, begin(buf_bytes), size(buf_bytes), offset), "pread");
     }
 
-    template<typename Buffer> size_t read(Buffer buf)
+    template<typename Buffer>
+    auto pwrite(const Buffer& buf, off_t offset) -> decltype(concepts::type_require<size_t>(as_bytes(buf)))
     {
-        size_t read_size = file_descriptor::pread(buf, this->tell());
-        this->incPosition(ssize_t(read_size));
-        return read_size;
+        using gatbl::as_bytes;
+        using gatbl::size;
+        const auto buf_bytes = as_bytes(buf);
+        size_t     sz        = sys::check_ret(::pwrite(_fd, begin(buf_bytes), size(buf_bytes), offset), "pwrite");
+        if (offset + sz > this->size()) setSize(offset + sz);
+        return sz;
+    }
+
+    template<typename Buffer> size_t read(Buffer& buf)
+    {
+        size_t sz = file_descriptor::pread(buf, this->tell());
+        this->incPosition(ssize_t(sz));
+        return sz;
+    }
+
+    template<typename Buffer> size_t write(const Buffer& buf)
+    {
+        size_t sz = file_descriptor::pwrite(buf, this->tell());
+        this->incPosition(ssize_t(sz));
+        return sz;
     }
 
 #ifdef __linux__
