@@ -1,9 +1,12 @@
 cmake_minimum_required(VERSION 2.8)
 
-project(example1)
+project(benchmark)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Suppressing benchmark's tests" FORCE)
+
 
 
 # If the example is compiled independantly
@@ -17,6 +20,11 @@ if(NOT DEFINED GATBL_SOURCE_DIR)
     find_package( ZLIB REQUIRED )
     include_directories( ${ZLIB_INCLUDE_DIRS} )
 endif()
+
+add_subdirectory(../thirdparty/benchmark ./benchmark)
+include_directories( "../thirdparty/benchmark/include" )
+add_executable(benchs "memory.cpp")
+target_link_libraries(benchs benchmark_main)
 
 add_executable(counter "counter.cpp")
 target_link_libraries(counter -lpthread -lrt -lz)
