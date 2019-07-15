@@ -11,15 +11,72 @@
 
 #include "gatbl/common.hpp"
 #include "gatbl/utils/ranges.hpp"
+#include "gatbl/utils/no_conversion.hpp"
 #include "gatbl/sys/bits.hpp"
+#include "gatbl/utils/range_view.hpp"
+#include "gatbl/utils/reverse_range.hpp"
 
 namespace gatbl {
 
-using nuc_t       = uint_fast8_t; // Nucleotide
 using bitsize_t   = uint_fast8_t; // Bits indices
-using ksize_t     = bitsize_t;    // Nucleotide incides
+using ksize_t     = bitsize_t;    // Nucleotide incides inside kmers
 using kmer_t      = uint64_t;     // k-mers, uint64_t for k<32, uint64_t for k<64
 using minimizer_t = uint32_t;     // Minimizers
+
+using nucint_t = uint_fast8_t;
+enum class nuc_t : nucint_t { A = 0, C, T, G, N = 255 };
+
+template<typename T = nucint_t>
+static inline enable_if_t<T(0) < T(-1), T>
+as_integer(nuc_t n)
+{
+    auto i = static_cast<uint_fast8_t>(n);
+    assume(i < 4, "invalid nucleotide %u", unsigned(i));
+    return i;
+}
+
+template<typename T>
+static inline enable_if_t<T(0) < T(-1), nuc_t>
+as_nuc(T n)
+{
+    assume(n < 4 || n == as_integer<T>(nuc_t::N), "invalid nucleotide %u", unsigned(n));
+    return nuc_t(n);
+}
+
+inline nucint_t
+complement(nucint_t nuc)
+{
+    return nuc ^ nucint_t(2u);
+}
+
+inline nuc_t
+complement(nuc_t nuc)
+{
+    return as_nuc(complement(as_integer(nuc)));
+}
+
+struct complement_functor
+{
+    template<typename T> auto operator()(T n) const -> decltype(complement(n)) { return complement(n); }
+};
+
+template<typename R> using reverse_complement_view = range_view<reverse_range<R>, complement_functor>;
+
+template<typename R>
+auto
+reverse_complement(R&& r)
+  -> decltype(concepts::type_require<reverse_complement_view<R>>(concepts::Range(reverse_complement_view<R>(r))))
+{
+
+    return reverse_complement_view<R>(r);
+}
+
+template<typename R>
+auto
+reversed(R&& r) -> decltype(concepts::type_require<reverse_range<R>>(concepts::Range(reverse_range<R>(r))))
+{
+    return reverse_range<R>(r);
+}
 
 // Represents the cardinality of a pow2 sized set. Allows div/mod arithmetic operations on indexes.
 template<typename T> struct Pow2
@@ -69,18 +126,18 @@ struct invalid_dna_exception : public std::domain_error
     {}
 };
 
-inline uint8_t hot_fun
-               nuc2int(char c)
+inline nuc_t hot_fun
+             nuc2int(char c) // FIXME: rename
 {
     //    if((c == 'a' || c == 'c' || c == 't' || c == 'g'
     //           || c == 'A' || c == 'C' || c == 'T' || c == 'G')) {
     //        return (c >> 1) & 3;
     //    }
-    uint8_t d = c - 65;
+    nucint_t d = c - 65;
     if (d <= 51) {
-        if (0x0008004500080045ull & (1ull << d)) { return (c >> 1) & 3; }
+        if (0x0008004500080045ull & (1ull << d)) { return as_nuc(nucint_t(c >> 1) & 3u); }
     }
-    throw invalid_dna_exception();
+    return nuc_t::N;
 }
 
 inline std::string pure_fun hot_fun
@@ -105,7 +162,7 @@ inline kmer_t pure_fun hot_fun
     kmer_t res(0);
     for (uint i = 0; i < str.size(); i++) {
         res <<= 2;
-        res |= nuc2int(str[i]);
+        res |= as_integer(nuc2int(str[i]));
     }
     return res;
 }
@@ -139,7 +196,7 @@ struct ReversibleHashOp
         return x;
     }
 
-    inline int64_t unrevhash(uint64_t x) pure_fun hot_fun
+    inline int64_t operator()(uint64_t x) pure_fun hot_fun
     {
         x = ((x >> 32) ^ x) * uint64_t(0xCFEE444D8B59A89B);
         x = ((x >> 32) ^ x) * uint64_t(0xCFEE444D8B59A89B);
@@ -244,8 +301,90 @@ inline uint32_t pure_fun hot_fun
     return res;
 }
 
+template<typename T>
+constexpr inline T
+get_kmer(T kmer)
+{
+    return kmer;
+}
+
+template<typename T> using get_kmer_t = decltype(get_kmer(std::declval<T>()));
+
+/// A wrapper for arguments that disable implicit conversions but allowing to extract kmer from decorated kmers (eg.
+/// sized_kmer)
+template<typename T> struct no_conversion_kmer : public no_conversion<T>
+{
+    using no_conversion<T>::no_conversion;
+
+    template<typename U, typename = if_is_same_cvref<T, get_kmer_t<U>>>
+    no_conversion_kmer(U&& v) // Implicit constructor with wildcard type argument for catching all conversion attempts
+      : no_conversion<T>(get_kmer(std::forward<U>(v)))
+    {}
+};
+
+template<typename kmer_t = kmer_t, typename ksize_t = ksize_t> struct packed_layout sized_kmer
+{
+    operator kmer_t() const { return kmer; }
+
+    kmer_t  kmer;
+    ksize_t size;
+};
+
+template<typename T>
+constexpr inline auto
+get_kmer(sized_kmer<T> sz_kmer) -> decltype(get_kmer(sz_kmer.kmer))
+{
+    return get_kmer(sz_kmer.kmer);
+}
+
+template<typename T> struct packed_layout positioned
+{
+    T      data;
+    size_t pos;
+
+    operator T() const { return data; }
+
+    bool operator<(const positioned& other) const
+    {
+        auto delta = this->data - other.data;
+        static_assert(std::is_signed<decltype(delta)>::value, "unsigned substraction result");
+        return likely(delta != 0) ? delta < 0 : this->pos < other.pos;
+    }
+
+    template<typename Extractor> static auto get_comparator(const Extractor& ex)
+    {
+        return [ex](const positioned& a, const positioned& b) {
+            auto delta = ex.compare(a.data, b.data);
+            static_assert(std::is_signed<decltype(delta)>::value, "unsigned substraction result");
+            return likely(delta != 0) ? delta < 0 : a.pos < b.pos;
+        };
+    }
+};
+
+template<typename T>
+constexpr inline auto
+get_kmer(positioned<T> pos_kmer) -> decltype(get_kmer(pos_kmer.data))
+{
+    return get_kmer(pos_kmer.data);
+}
+
+template<typename kmer_t = kmer_t, typename ksize_t = ksize_t>
+std::string
+to_string(const sized_kmer<kmer_t, ksize_t>& kmer)
+{
+    return kmer2str(kmer.kmer, kmer.size);
+}
+
+template<typename kmer_t = kmer_t, typename ksize_t = ksize_t>
+std::ostream&
+operator<<(std::ostream& out, const sized_kmer<kmer_t, ksize_t>& kmer)
+{
+    return out << to_string(kmer);
+}
+
 namespace details {
 
+// TODO refine these helper as view facade for reuse in iterator_pair and friends
 // Completes the definition of random iterator wrappers
 template<typename Base> struct random_iter_wrapper : public Base
 {
@@ -268,11 +407,29 @@ template<typename Base> struct random_iter_wrapper : public Base
         ++_repr;
         return *this;
     }
-    //    random_iter_wrapper operator++(int) { auto cpy = *this; ++*this; return cpy; }
-    //    random_iter_wrapper& operator-=(difference_type d) { _repr -= d; return *this; }
-    //    random_iter_wrapper operator-(difference_type d) { return { _repr - d }; }
-    //    random_iter_wrapper& operator--() { _repr--; return *this; }
-    //    random_iter_wrapper operator--(int) { auto cpy = *this; --*this; return cpy; }
+    random_iter_wrapper operator++(int)
+    {
+        auto cpy = *this;
+        ++*this;
+        return cpy;
+    }
+    random_iter_wrapper& operator-=(difference_type d)
+    {
+        _repr -= d;
+        return *this;
+    }
+    random_iter_wrapper  operator-(difference_type d) { return {_repr - d}; }
+    random_iter_wrapper& operator--()
+    {
+        _repr--;
+        return *this;
+    }
+    random_iter_wrapper operator--(int)
+    {
+        auto cpy = *this;
+        --*this;
+        return cpy;
+    }
     difference_type operator-(const random_iter_wrapper& other) const { return this->_repr - other._repr; }
     bool            operator<(const random_iter_wrapper& other) const { return this->_repr < other._repr; }
     bool            operator<=(const random_iter_wrapper& other) const { return this->_repr <= other._repr; }
@@ -295,9 +452,9 @@ struct const_dna_bitstring_iter_base
     {
         operator nuc_t()
         {
-            ksize_t offset = _ptr & 0b11;
+            ksize_t offset = _ptr & 0b11u;
             auto    ptr    = reinterpret_cast<const uint8_t * restrict>(_ptr >> 2);
-            return (*ptr >> offset) & 0b11;
+            return as_nuc((*ptr >> offset) & 0b11u);
         }
 
       protected:
@@ -353,11 +510,7 @@ template<typename _repr_t> struct dna_ascii_iter_base
     {
         operator nuc_t() const { return nuc2int(*_ptr); }
 
-        const reference& operator=(nuc_t n) const
-        {
-            assume(n < 4, "Invalid nucleotide code %u", unsigned(n));
-            *const_cast<char*>(this->_ptr) = "ACTG"[n];
-        }
+        const reference& operator=(nuc_t n) const { *const_cast<char*>(this->_ptr) = "ACTG"[as_integer(n)]; }
 
       protected:
         template<typename C> friend struct random_iter_wrapper;
@@ -375,34 +528,25 @@ template<typename _repr_t> struct dna_ascii_iter_base
     _repr_t _repr;
 };
 
-template<typename R, typename _iterator_wrapper, typename _const_iterator_wrapper> struct wrapped_range
+template<typename R, typename _iterator_wrapper> struct wrapped_range
 {
   private:
-    using range_t = typename std::remove_reference<R>::type;
+    using range_t = remove_reference_t<R>;
 
   public:
-    using iterator =
-      typename std::conditional<std::is_const<range_t>::value, _const_iterator_wrapper, _iterator_wrapper>::type;
-    using const_iterator  = _const_iterator_wrapper;
-    using element_type    = typename iterator::value_type;
-    using reference       = typename iterator::reference;
-    using const_reference = typename const_iterator::reference;
-    using size_type       = typename range_t::size_type;
+    using iterator     = _iterator_wrapper;
+    using element_type = typename iterator::value_type;
+    using reference    = typename iterator::reference;
+    using size_type    = size_t;
 
-    const_iterator  begin() const { return const_iterator(repr.begin()); }
-    iterator        begin() { return iterator(repr.begin()); }
-    const_iterator  end() const { return const_iterator(repr.end()); }
-    iterator        end() { return iterator(repr.end()); }
-    const_reference operator[](size_type i) const
+    iterator  begin() const { return _iterator_wrapper(gatbl::begin(repr)); }
+    iterator  end() const { return _iterator_wrapper(gatbl::end(repr)); }
+    reference operator[](size_type i) const
     {
         assume(repr.begin() + i < repr.end(), "Past the end index");
         return *const_iterator(repr.begin() + i);
     }
-    reference operator[](size_type i)
-    {
-        assume(repr.begin() + i < repr.end(), "Past the end index");
-        return *iterator(repr.begin() + i);
-    }
+
     size_type size() const { return end() - begin(); }
 
     template<typename _R>
@@ -422,32 +566,29 @@ template<typename R, typename _iterator_wrapper, typename _const_iterator_wrappe
 
 }
 
-using dna_bitstring_iter                   = details::random_iter_wrapper<details::dna_bitstring_iter_base>;
-using const_dna_bitstring_iter             = details::random_iter_wrapper<details::const_dna_bitstring_iter_base>;
-template<typename It> using dna_ascii_iter = details::random_iter_wrapper<details::dna_ascii_iter_base<It>>;
-template<typename R>
-using dna_bitstring_range = details::wrapped_range<R, dna_bitstring_iter, const_dna_bitstring_iter>;
-template<typename R>
-using dna_ascii_range = details::wrapped_range<R,
-                                               dna_ascii_iter<typename std::remove_reference<R>::type::iterator>,
-                                               dna_ascii_iter<typename std::remove_reference<R>::type::const_iterator>>;
+using dna_bitstring_iter                       = details::random_iter_wrapper<details::dna_bitstring_iter_base>;
+template<typename It> using dna_ascii_iter     = details::random_iter_wrapper<details::dna_ascii_iter_base<It>>;
+template<typename R> using dna_bitstring_range = details::wrapped_range<R, dna_bitstring_iter>;
+template<typename R> using dna_ascii_range     = details::wrapped_range<R, dna_ascii_iter<iterator_t<R>>>;
 
-/// Represent an initiated iteration of a window over an iterator
+/// Represent an initiated iteration of a window over a range
 template<typename R, typename W> struct window_range
 {
     using window_t         = remove_reference_t<W>;
     using inner_iterator_t = gatbl::iterator_t<R>;
-    using sentinel_t       = gatbl::sentinel_t<R>;
+    using sentinel         = gatbl::sentinel_t<R>;
     using value_type       = remove_reference_t<decltype(*std::declval<window_t>())>;
 
     template<typename _W, typename... Args>
-    window_range(_W&& w, Args&&... args)
+    window_range(_W&& w, Args&&... args) // That whole story is kinda sad: I'm not decided if reference or inlines are
+                                         // better in most case and
       : _inner_range(std::forward<Args>(args)...)
       , _win(std::forward<_W>(w))
       , _it(_win.fill(_inner_range.begin()))
       , _end(_inner_range.end())
     {}
 
+    // FIXME: view facade needed: this again is a meatless wrapper with all the logic in the iterator:
     using const_iterator = class iterator
     {
         window_range& _r;
@@ -463,7 +604,7 @@ template<typename R, typename W> struct window_range
             if (it != _r._end) _r._win.push_back(*it);
             return *this;
         }
-        bool operator!=(sentinel_t sentinel) const flatten_fun hot_fun
+        bool operator!=(sentinel sentinel) const flatten_fun hot_fun
         {
             // assume(&other._r == &_r, "Compare iterators from different window ranges");
             return _r._it != sentinel;
@@ -492,7 +633,7 @@ template<typename R, typename W> struct window_range
     R                _inner_range; // Let the parameterization choose if this a reference or not
     W                _win;         // Same here
     inner_iterator_t _it;
-    const sentinel_t _end;
+    const sentinel   _end;
 };
 
 template<typename R, typename W>
@@ -545,18 +686,20 @@ template<typename kmer_t = kmer_t, typename Canonical = LexicoCanonical> struct 
       , _k(k)
       , _left_bitpos(2 * (k - 1))
     {
-        assume((k & 1) != 0, "k must be odd");
         assume(k <= sizeof(kmer_t) * 4, "k too large");
+    }
+
+    void clear()
+    {
+        _reverse = 0;
+        _forward = 0;
     }
 
     template<typename It> hot_fun It fill(It it)
     {
-        _reverse = 0;
-        _forward = 0;
-
-        _push_back(check_nuc(*it));
+        unchecked_push_back(*it);
         for (ksize_t i = 1; i < _k; ++i) {
-            _push_back(check_nuc(*++it));
+            unchecked_push_back(*++it);
         }
         check();
         return it;
@@ -578,40 +721,36 @@ template<typename kmer_t = kmer_t, typename Canonical = LexicoCanonical> struct 
 
     hot_fun kmer_window& push_back(nuc_t nuc)
     {
-        _push_back(check_nuc(nuc));
+        unchecked_push_back(nuc);
+        mask(true);
         return check();
     }
 
     hot_fun kmer_window& push_front(nuc_t nuc)
     {
-        _push_front(check_nuc(nuc));
+        unchecked_push_front(nuc);
+        mask(false);
         return check();
     }
 
-    ksize_t       size() const { return _k; }
-    const kmer_t& forward() const { return _forward; }
-    const kmer_t& reverse() const { return _reverse; }
-    kmer_t        canon() const { return Canonical::canonize_bidir(_forward, _reverse); }
-
-    kmer_t operator*() { return canon(); }
-
-  private:
-    void _push_back(nuc_t nuc)
+    void unchecked_push_back(nuc_t nuc)
     {
-        _forward = ((_forward << 2) & _mask) | nuc;
-        _reverse = (_reverse >> 2) | (kmer_t(0b10 ^ nuc) << _left_bitpos);
+        _forward = (_forward << 2) | as_integer<kmer_t>(nuc);
+        _reverse = (_reverse >> 2) | (kmer_t(0b10 ^ as_integer(nuc)) << _left_bitpos);
     }
 
-    void _push_front(nuc_t nuc)
+    void unchecked_push_front(nuc_t nuc)
     {
-        _forward = (_forward >> 2) | (kmer_t(nuc) << _left_bitpos);
-        _reverse = ((_reverse << 2) & _mask) | (0b10 ^ nuc);
+        _forward = (_forward >> 2) | (as_integer<kmer_t>(nuc) << _left_bitpos);
+        _reverse = (_reverse << 2) | (0b10 ^ as_integer<kmer_t>(nuc));
     }
 
-    template<typename N> nuc_t check_nuc(N nuc) const
+    void mask(bool forward = true)
     {
-        assume(nuc < 4, "Invalid nuclotide code %u", unsigned(nuc));
-        return nuc;
+        if (forward)
+            _forward &= _mask;
+        else
+            _reverse &= _mask;
     }
 
     kmer_window& check()
@@ -622,8 +761,17 @@ template<typename kmer_t = kmer_t, typename Canonical = LexicoCanonical> struct 
         return *this;
     }
 
+    using sized_kmer_t = sized_kmer<kmer_t, ksize_t>;
+    ksize_t      size() const { return _k; }
+    sized_kmer_t forward() const { return {_forward, _k}; }
+    sized_kmer_t reverse() const { return {_reverse, _k}; }
+    sized_kmer_t canon() const { return {Canonical::canonize_bidir(_forward, _reverse), _k}; }
+
+    sized_kmer_t operator*() { return canon(); }
+
+  private:
     const kmer_t  _mask;
-    kmer_t        _forward, _reverse;
+    kmer_t        _forward = {}, _reverse = {};
     const ksize_t _k;
     bitsize_t     _left_bitpos;
 };
@@ -653,7 +801,7 @@ template<typename HashFunctor = ReversibleHash> struct hash_kmer : private HashF
 
     template<typename _kmer_t, typename hash_t> struct hashed_kmer
     {
-        using kmer_t = typename std::remove_reference<_kmer_t>::type;
+        using kmer_t = remove_reference_t<_kmer_t>;
         kmer_t kmer;
         hash_t hash;
                operator kmer_t() const { return kmer; }
@@ -674,7 +822,7 @@ template<typename rank_t> struct rank_kmer
 
     template<typename _kmer_t> struct ranked_kmer
     {
-        using kmer_t = typename std::remove_reference<_kmer_t>::type;
+        using kmer_t = remove_reference_t<_kmer_t>;
         kmer_t kmer;
         rank_t rank;
                operator kmer_t() const { return kmer; }
