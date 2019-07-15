@@ -3,7 +3,7 @@
 
 #include "gatbl/utils/empty_base.hpp"
 #include "gatbl/utils/ranges.hpp"
-#include "gatbl/utils/concepts.h"
+#include "gatbl/utils/concepts.hpp"
 
 namespace gatbl {
 
@@ -11,8 +11,7 @@ namespace gatbl {
 /// bijection)
 template<typename Rep, typename Iso> class range_view : public utils::empty_base<Rep, Iso>
 {
-    using base      = utils::empty_base<Rep, Iso>;
-    using _iterator = iterator_t<Rep>;
+    using base = utils::empty_base<Rep, Iso>;
 
     template<typename T> class wreference : protected utils::empty_base<T, Iso>
     {
@@ -45,13 +44,15 @@ template<typename Rep, typename Iso> class range_view : public utils::empty_base
             ++this->value();
             return *this;
         }
-        bool                    operator!=(witerator& other) { return this->value() != other.value(); }
+        bool                    operator!=(witerator other) { return this->value() != other.value(); }
         wreference<_value_type> operator*() { return wreference<_value_type>(*(this->value()), this->tag()); }
     };
 
   public:
     using base::base;
 
+    using reference              = wreference<value_t<Rep>>;
+    using const_reference        = wreference<value_t<const Rep>>;
     using iterator               = witerator<iterator_t<Rep>>;
     using const_iterator         = witerator<iterator_t<const Rep>>;
     using sentinel               = witerator<sentinel_t<Rep>>;
@@ -60,6 +61,9 @@ template<typename Rep, typename Iso> class range_view : public utils::empty_base
     using reverse_const_iterator = witerator<reverse_iterator_t<const Rep>>;
     using reverse_sentinel       = witerator<reverse_sentinel_t<Rep>>;
     using reverse_const_sentinel = witerator<reverse_sentinel_t<const Rep>>;
+
+    reference       operator[](size_t pos) { return {this->value()[pos], this->tag()}; }
+    const_reference operator[](size_t pos) const { return {this->value()[pos], this->tag()}; }
 
     friend constexpr iterator               begin(range_view& rv) { return {begin(rv.value()), rv.tag()}; }
     friend constexpr const_iterator         begin(const range_view& rv) { return {begin(rv.value()), rv.tag()}; }

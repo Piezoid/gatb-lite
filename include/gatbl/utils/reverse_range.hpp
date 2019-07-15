@@ -1,60 +1,40 @@
-#ifndef REVERSE_RANGE_HPP
-#define REVERSE_RANGE_HPP
+#ifndef GATBL_REVERSE_RANGE_HPP
+#define GATBL_REVERSE_RANGE_HPP
 
 #include "gatbl/utils/ranges.hpp"
 
 namespace gatbl {
 
-template<typename Repr> struct reverse_range
+template<typename Repr>
+class reverse_range
+  : public view_facade<reverse_range<Repr>,
+                       std::reverse_iterator<sentinel_t<Repr>>,
+                       std::reverse_iterator<iterator_t<Repr>>>
 {
-    using element_type           = value_t<Repr>;
-    using reverse_iterator       = iterator_t<Repr>;
-    using const_reverse_iterator = iterator_t<const Repr>;
-    using iterator               = std::reverse_iterator<reverse_iterator>;
-    using const_iterator         = std::reverse_iterator<const_reverse_iterator>;
+    using base = view_facade<reverse_range<Repr>,
+                             std::reverse_iterator<sentinel_t<Repr>>,
+                             std::reverse_iterator<iterator_t<Repr>>>;
 
-    // public for brace initialization
     Repr _data;
 
-    constexpr auto size() const noexcept -> decltype(size(this->_data)) { return size(this->_data); }
-    constexpr auto empty() const noexcept -> decltype(empty(this->_data)) { return empty(this->_data); }
+  public:
+    using typename base::iterator;
+    using typename base::sentinel;
+    using reverse_sentinel = sentinel_t<Repr>;
+    using reverse_iterator = iterator_t<Repr>;
 
-    friend constexpr const_iterator begin(const reverse_range& r) noexcept { return const_iterator(end(r._data)); }
-    friend constexpr const_iterator end(const reverse_range& r) noexcept { return const_iterator(begin(r._data)); }
-    friend constexpr iterator       begin(reverse_range& r) noexcept { return iterator(end(r._data)); }
-    friend constexpr iterator       end(reverse_range& r) noexcept { return iterator(begin(r._data)); }
+    template<typename... Args, typename = enable_if_t<std::is_constructible<Repr, Args...>::value>>
+    reverse_range(Args&&... args)
+      : _data(std::forward<Args>(args)...)
+    {}
 
-    friend constexpr const_reverse_iterator rbegin(const reverse_range& r) noexcept { return begin(r._data); }
-    friend constexpr const_reverse_iterator rend(const reverse_range& r) noexcept { return end(r._data); }
-    friend constexpr reverse_iterator       rbegin(reverse_range& r) noexcept { return begin(r._data); }
-    friend constexpr reverse_iterator       rend(reverse_range& r) noexcept { return end(r._data); }
+    iterator begin() const { return iterator{_data.end()}; }
+    sentinel end() const { return sentinel{_data.begin()}; }
 
-    constexpr element_type&       front() noexcept { return *begin(*this); }
-    constexpr const element_type& front() const noexcept { return *begin(*this); }
-    constexpr element_type&       back() noexcept
-    {
-        assume(!empty());
-        return *(end(*this) - 1);
-    }
-    constexpr const element_type& back() const noexcept
-    {
-        assume(!empty());
-        return *(end(*this) - 1);
-    }
-
-    const element_type& operator[](size_t i) const noexcept
-    {
-        assume(i < size());
-        return *(begin(*this) + i);
-    }
-
-    element_type& operator[](size_t i) noexcept
-    {
-        assume(i < size());
-        return *(begin(*this) + i);
-    }
+    reverse_iterator rbegin() const { return _data.begin(); }
+    reverse_sentinel rend() const { return _data.end(); }
 };
 
-}
+} // namespace gatbl
 
-#endif // REVERSE_RANGE_HPP
+#endif // GATBL_REVERSE_RANGE_HPP

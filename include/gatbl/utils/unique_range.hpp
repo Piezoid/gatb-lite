@@ -2,11 +2,10 @@
 #define UNIQUE_RANGE_HPP
 
 #include <memory>
-#include "gatbl/utils/empty_base.hpp"
 
 namespace gatbl {
 
-template<typename T, typename D = std::default_delete<T[]>> struct unique_range
+template<typename T, typename D = std::default_delete<T[]>> struct unique_range : private D
 {
 
     using element_type    = T;
@@ -20,12 +19,14 @@ template<typename T, typename D = std::default_delete<T[]>> struct unique_range
 
     template<typename _D = D>
     unique_range(T* ptr, size_t size, _D&& d = D{}) noexcept
-      : _ptr(ptr, std::forward<D>(d))
+
+      : D(std::forward<_D>(d))
+      , _ptr(ptr)
       , _size(size)
     {}
+    ~unique_range() { reset(); }
     unique_range(const unique_range&) = delete;
     unique_range(unique_range&& from) noexcept
-      : unique_range()
     {
         std::swap(from._ptr, _ptr);
         std::swap(from._size, _size);
@@ -33,16 +34,16 @@ template<typename T, typename D = std::default_delete<T[]>> struct unique_range
     unique_range& operator=(const unique_range&) = delete;
     unique_range& operator                       =(unique_range&& from) noexcept
     {
-        reset();
         std::swap(from._ptr, _ptr);
         std::swap(from._size, _size);
         return *this;
     }
 
-    size_t size() const noexcept { return _ptr.value() ? _size : 0; }
-    bool   empty() const noexcept { return _ptr.value() && _size; }
+    size_t size() const noexcept { return _ptr ? _size : 0; }
+    bool   empty() const noexcept { return _ptr && _size; }
+           operator bool() const noexcept { return empty(); }
 
-    const_iterator begin() const noexcept { return _ptr.value(); }
+    const_iterator begin() const noexcept { return _ptr; }
     const_iterator end() const noexcept { return begin() + size(); }
 
     operator T*() const { return begin(); }
@@ -55,32 +56,24 @@ template<typename T, typename D = std::default_delete<T[]>> struct unique_range
 
     void reset(std::nullptr_t = nullptr)
     {
-        if (!empty()) { destruct(_ptr.tag()); }
-        _ptr  = nullptr;
-        _size = 0;
+        T*     ptr  = nullptr;
+        size_t size = 0;
+
+        std::swap(_ptr, ptr);
+        std::swap(_size, size);
+
+        if (ptr != nullptr) call_deleter(*static_cast<D*>(this), ptr, size);
     }
 
   protected:
-    // FIXME: would like to enable this for default_delete<T[]>
-    //    auto destruct(D& d) -> decltype(d(this->begin()))
-    //    {
-    //        utils::empty_base<T*, D> ptr = { nullptr, {} };
-    //        std::swap(_ptr, ptr);
-    //        _size = 0;
-    //        return ptr.tag()(ptr.value());
-    //    }
-
-    void destruct(D& d /*, std::nullptr_t = nullptr*/) //-> decltype(d(this->begin(), this->size()))
+    template<typename _D> static auto call_deleter(_D& d, T* ptr, size_t size) -> decltype(d(ptr, size))
     {
-        utils::empty_base<T*, D> ptr = {nullptr, {}};
-        std::swap(_ptr, ptr);
-        size_t size = 0;
-        std::swap(_size, size);
-        return ptr.tag()(ptr.value(), size);
+        return d(ptr, size);
     }
+    template<typename _D> static auto call_deleter(_D& d, T* ptr, size_t) -> decltype(d(ptr)) { return d(ptr); }
 
-    utils::empty_base<T*, D> _ptr  = {nullptr, {}};
-    size_t                   _size = 0;
+    T*     _ptr  = nullptr;
+    size_t _size = 0;
 };
 
 } // namespace gatbl
