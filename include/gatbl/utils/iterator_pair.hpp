@@ -72,6 +72,28 @@ size(const iterator_pair<I, S, CI>& r) -> make_unsigned_t<decltype(distance(begi
     return std::distance(begin(r), end(r));
 }
 
+template<typename R> struct default_splitter
+{
+    using iterator = iterator_t<R>;
+    using sentinel = sentinel_t<R>;
+
+    explicit default_splitter(size_t size)
+      : _size(size)
+    {}
+    default_splitter(const default_splitter&) = default;
+
+    iterator split(iterator beg, sentinel end)
+    {
+        size_t dist = distance(beg, end);
+        advance(beg, dist / 2);
+        return dist > _size ? beg : end;
+    }
+
+    iterator_pair<iterator, sentinel> make_range(iterator beg, sentinel end) { return {beg, end}; }
+
+    size_t _size = SIZE_MAX;
+};
+
 } // namespace gatbl
 
 #endif // INTERATOR_PAIR_HPP
