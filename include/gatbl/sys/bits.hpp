@@ -616,8 +616,42 @@ tile_bitgroup(T v) -> concepts::if_unsigned_t<T>
     return v;
 }
 
-} // namespace bits
+/// Retreive an unsigned integer stored as varible byte code
+/// The src_end is only for debugging purpose
+inline const uint8_t*
+load_int_vb(const uint8_t* src, const uint8_t* src_end, size_t& value)
+{
+    size_t _value = 0; // Avoid aliasing with src
+    size_t offset = 0;
+    while (*src >= uint8_t(128u)) {
+        assume(src < src_end, "Unfinished variable byte code");
+        assume(offset < bits::bitwidth<size_t>(), "variable byte code too long for size_t");
+        _value |= (*src++ & 127u) << offset;
+        offset += 7u;
+    }
 
+    assume(src < src_end, "Unfinished variable byte code");
+    assume(offset < bits::bitwidth<size_t>(), "variable byte code too long for size_t");
+    _value |= (*src++) << offset;
+    value = _value;
+    return src;
+}
+
+/// Store a integer as a variable byte code
+/// If space was sufficient, returns a pointer to the byte following the last byte code, otherwise dst_end
+/// FIXME: this doesn't allows to differentiate between overflow and exact fit (fine for our application)
+inline uint8_t*
+store_int_vb(uint8_t* dst, const uint8_t* dst_end, size_t value)
+{
+    while (value >= 128 && likely(dst < dst_end)) {
+        *dst++ = (value & 127u) | 128u;
+        value >>= 7u;
+    }
+    if (likely(dst < dst_end)) { *dst++ = uint8_t(value); }
+    return dst;
+}
+
+} // namespace bits
 } // namespace gatbl
 
 #endif // GATBL_BITS_HPP
