@@ -9,9 +9,11 @@ namespace gatbl {
 
 /// Construct a range wrapper giver an isomorphism functor (with one overload of operator() for each side of the
 /// bijection)
-template<typename Rep, typename Iso> class range_view : public utils::empty_base<Rep, Iso>
+template<typename Rep, typename Iso, typename To = decltype(std::declval<Iso>()(std::declval<Rep>()))>
+class range_view : public utils::empty_base<Rep, Iso>
 {
     using base = utils::empty_base<Rep, Iso>;
+    using type = To;
 
     template<typename T> class wreference : protected utils::empty_base<T, Iso>
     {
@@ -21,7 +23,7 @@ template<typename Rep, typename Iso> class range_view : public utils::empty_base
         using base::base;
 
       public:
-        operator auto() const { return this->tag()(this->value()); }
+        operator type() const { return this->tag()(this->value()); }
 
         template<typename V>
         auto operator=(V&& v)

@@ -36,9 +36,6 @@ using std::make_unsigned_t;
 using std::remove_const_t;
 using std::remove_reference_t;
 
-// Constexpr alias for *::value
-using std::is_same_v;
-
 #    define CPP14_CONSTEXPR constexpr
 
 #else
@@ -136,9 +133,7 @@ template<class T> using remove_const_t                 = typename std::remove_co
 template<class T> using remove_reference_t             = typename std::remove_reference<T>::type;
 template<class T> using make_unsigned_t                = typename std::make_unsigned<T>::type;
 template<bool B, class T = void> using enable_if_t     = typename std::enable_if<B, T>::type;
-template<bool I, class T, class E> using conditional_t = typename std::conditional_t<I, T, E>::type;
-
-template<typename T, typename U> inline constexpr bool is_same_v = is_same<T, U>::value;
+template<bool I, class T, class E> using conditional_t = typename std::conditional<I, T, E>::type;
 
 #    define CPP14_CONSTEXPR
 

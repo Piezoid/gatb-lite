@@ -88,11 +88,11 @@ struct iterator_traits : public std::iterator_traits<Iterator>
     using typename base::value_type;
     using size_type = make_unsigned_t<difference_type>;
 
-    static constexpr bool is_output        = !std::is_const_v<value_type>;
+    static constexpr bool is_output        = !std::is_const<value_type>::value;
     static constexpr bool is_bidirectional = false;
     static constexpr bool is_random_access = false;
 
-    static bool      bound_check(IR it, IR first, SR last) { return it != last; }
+    static bool      bound_check(IR it, IR, SR last) { return it != last; }
     static reference deref_check(IR it, IR first, SR last)
     {
         assume(traits::bound_check(it, first, last), "Out of bound");
@@ -156,11 +156,11 @@ struct iterator_traits<I, S, std::random_access_iterator_tag>
 template<typename Derived> struct iterator_facade
 {
   protected:
-    template<typename D = Derived, typename = enable_if_t<std::is_same_v<D, Derived>>> D& derived()
+    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>> D& derived()
     {
         return *static_cast<Derived*>(this);
     }
-    template<typename D = Derived, typename = enable_if_t<std::is_same_v<D, Derived>>> const D& derived() const
+    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>> const D& derived() const
     {
         return *static_cast<const Derived*>(this);
     }
@@ -231,12 +231,12 @@ template<typename Derived, typename I, typename S = I> struct view_facade
   private:
     using it_traits = iterator_traits<I, S>;
 
-    template<typename D = Derived, typename = enable_if_t<std::is_same_v<D, Derived>>>
+    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>>
     auto derived() -> decltype(*static_cast<D*>(this))
     {
         return *static_cast<Derived*>(this);
     }
-    template<typename D = Derived, typename = enable_if_t<std::is_same_v<D, Derived>>>
+    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>>
     auto derived() const -> decltype(*static_cast<const D*>(this))
     {
         return *static_cast<const Derived*>(this);
@@ -269,13 +269,13 @@ template<typename Derived, typename I, typename S = I> struct view_facade
 
     template<typename D = Derived>
     auto rbegin() const
-      -> std::enable_if_t<iterator_traits<S, I>::is_bidirectional, std::reverse_iterator<decltype(derived<D>().end())>>
+      -> enable_if_t<iterator_traits<S, I>::is_bidirectional, std::reverse_iterator<decltype(derived<D>().end())>>
     {
         return std::reverse_iterator<S>{derived().end()};
     }
     template<typename D = Derived>
-    auto rend() const -> std::enable_if_t<iterator_traits<S, I>::is_bidirectional,
-                                          std::reverse_iterator<decltype(derived<D>().begin())>>
+    auto rend() const
+      -> enable_if_t<iterator_traits<S, I>::is_bidirectional, std::reverse_iterator<decltype(derived<D>().begin())>>
     {
         return std::reverse_iterator<I>{derived().begin()};
     }
@@ -306,7 +306,7 @@ template<typename Derived, typename I, typename S = I> struct view_facade
         return it_traits::at(idx, derived().begin(), derived().end());
     }
 
-    template<typename D = Derived, typename = enable_if_t<is_same_v<D, Derived>>>
+    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>>
     friend std::ostream& operator<<(std::ostream& sout, const Derived& rng)
     { // Courtesy of range-v3
         sout << '[';

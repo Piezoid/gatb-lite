@@ -80,29 +80,29 @@ size(const iterator_pair<I, S>& r) -> make_unsigned_t<decltype(distance(begin(r)
 template<typename T> using span = iterator_pair<T*, T*>;
 
 template<typename T>
-std::byte*
+byte*
 as_bytes(T* p)
 {
-    return reinterpret_cast<std::byte*>(p);
+    return reinterpret_cast<byte*>(p);
 }
 
 template<typename T>
-const std::byte*
+const byte*
 as_bytes(const T* p)
 {
-    return reinterpret_cast<const std::byte*>(p);
+    return reinterpret_cast<const byte*>(p);
 }
 
 template<typename R>
 auto
-as_bytes(const R& r) -> decltype(span<const std::byte>(as_bytes(begin(r)), size(r) * sizeof(*begin(r))))
+as_bytes(const R& r) -> decltype(span<const byte>(as_bytes(begin(r)), size(r) * sizeof(*begin(r))))
 {
     return {as_bytes(begin(r)), size(r)};
 }
 
 template<typename R>
 auto
-as_bytes(R& r) -> decltype(span<std::byte>(as_bytes(begin(r)), size(r) * sizeof(*begin(r))))
+as_bytes(R& r) -> decltype(span<byte>(as_bytes(begin(r)), size(r) * sizeof(*begin(r))))
 {
     return {as_bytes(begin(r)), size(r) * sizeof(*begin(r))};
 }

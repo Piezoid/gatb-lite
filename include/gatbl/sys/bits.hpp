@@ -10,13 +10,21 @@
 
 #include "gatbl/utils/ranges.hpp"
 
-namespace gatbl::concepts {
+namespace gatbl {
+
+namespace concepts {
 
 template<typename T, typename Res_t = T> using if_unsigned_t = enable_if_t<(T(-1) > T(0)), Res_t>;
 
 template<typename T> auto Unsigned(T) -> if_unsigned_t<T>;
 
-/// Checks for a finite unsigned random rang
+/// Checks for a unsigned integer or a finite unsigned random range
+template<typename T> auto RawKmer(T) -> if_unsigned_t<T>;
+template<typename Range, typename T = Range&&>
+auto
+RawKmer(Range&& r) -> decltype(type_require<T&&>(Unsigned(at(r, 0u)), size(r)));
+
+/// Checks for a finite unsigned random range
 template<typename Range, typename T = Range&&>
 auto
 UnsignedRange(Range&& r) -> decltype(type_require<T&&>(Unsigned(at(r, 0u)), size(r)));
@@ -34,9 +42,9 @@ CopyableUnsignedRanges(const Rin& in, Rout&& out) -> decltype(value_require(std:
                                                                             Unsigned(at(out, 0u) = at(in, 0u)),
                                                                             size(in),
                                                                             size(out)));
-} // namespace gatbl::concepts
+} // namespace concepts
 
-namespace gatbl::bits {
+namespace bits {
 
 namespace details {
 template<size_t bits> struct uint;
@@ -212,7 +220,7 @@ inline CPP14_CONSTEXPR size_t
 /// CLZ for uint smaller than 32 bits
 template<typename T>
 inline CPP14_CONSTEXPR auto
-clz(T x) -> std::enable_if_t<sizeof(T) < sizeof(unsigned int), decltype(clz(static_cast<unsigned int>(x)))>
+clz(T x) -> enable_if_t<sizeof(T) < sizeof(unsigned int), decltype(clz(static_cast<unsigned int>(x)))>
 {
 
     auto         lz         = clz(static_cast<unsigned int>(x));
@@ -224,7 +232,7 @@ clz(T x) -> std::enable_if_t<sizeof(T) < sizeof(unsigned int), decltype(clz(stat
 template<typename T>
 inline CPP14_CONSTEXPR auto
 clz(T x)
-  -> std::enable_if_t<(sizeof(T) > sizeof(unsigned long long)) && sizeof(T) % sizeof(unsigned long long) == 0, unsigned>
+  -> enable_if_t<(sizeof(T) > sizeof(unsigned long long)) && sizeof(T) % sizeof(unsigned long long) == 0, unsigned>
 {
     constexpr size_t n = sizeof(T) / sizeof(unsigned long long);
 
@@ -282,9 +290,11 @@ rshift(const Rin& in, Rout& out, size_t n) -> decltype(concepts::CopyableUnsigne
     using T                    = decltype(at(in, 0));
     constexpr size_t word_bits = bitwidth<T>();
 
-    const auto [word_shift, bit_shift] = split_bitoffset<T>(n);
-    const auto szi                     = size(in);
-    const auto szo                     = size(out);
+    const auto bit_offset = split_bitoffset<T>(n);
+    const auto word_shift = bit_offset.first;
+    const auto bit_shift  = bit_offset.second;
+    const auto szi        = size(in);
+    const auto szo        = size(out);
     assume(szi <= szo, "rshift: size(in)=%lu > size(out)%lu", szi, szo);
     assume(word_shift < szo, "word_shift=%lu >= size(out)=%lu", word_shift, szi);
 
@@ -315,9 +325,11 @@ rshift_restricted(const Rin& in, Rout& out, size_t n) -> decltype(concepts::Copy
     using T                    = decltype(at(in, 0));
     constexpr size_t word_bits = bitwidth<T>();
 
-    const auto [word_shift, bit_shift] = split_bitoffset<T>(n);
-    const auto szi                     = size(in);
-    const auto szo                     = size(out);
+    const auto bit_offset = split_bitoffset<T>(n);
+    const auto word_shift = bit_offset.first;
+    const auto bit_shift  = bit_offset.second;
+    const auto szi        = size(in);
+    const auto szo        = size(out);
     assume(szi <= szo, "size(in)=%lu > size(out)%lu", szi, szo);
     assume(word_shift < szo, "word_shift=%lu >= size(out)=%lu", word_shift, szi);
 
@@ -355,9 +367,11 @@ lshift(const Rin& in, Rout& out, size_t n) -> decltype(concepts::CopyableUnsigne
     using T                    = decltype(at(in, 0));
     constexpr size_t word_bits = bitwidth<T>();
 
-    const auto [word_shift, bit_shift] = split_bitoffset<T>(n);
-    const auto szi                     = size(in);
-    const auto szo                     = size(out);
+    const auto bit_offset = split_bitoffset<T>(n);
+    const auto word_shift = bit_offset.first;
+    const auto bit_shift  = bit_offset.second;
+    const auto szi        = size(in);
+    const auto szo        = size(out);
     assume(szi <= szo, "size(in)=%lu > size(out)%lu", szi, szo);
     assume(word_shift < szo, "word_shift=%lu >= size(out)=%lu", word_shift, szi);
 
@@ -388,9 +402,11 @@ lshift_restricted(const Rin& in, Rout& out, size_t n) -> decltype(concepts::Copy
     using T                    = decltype(at(in, 0));
     constexpr size_t word_bits = bitwidth<T>();
 
-    const auto [word_shift, bit_shift] = split_bitoffset<T>(n);
-    const auto szi                     = size(in);
-    const auto szo                     = size(out);
+    const auto bit_offset = split_bitoffset<T>(n);
+    const auto word_shift = bit_offset.first;
+    const auto bit_shift  = bit_offset.second;
+    const auto szi        = size(in);
+    const auto szo        = size(out);
     assume(szi <= szo, "size(in)=%lu > size(out)%lu", szi, szo);
     assume(word_shift < szo, "word_shift=%lu >= size(out)=%lu", word_shift, szi);
 
@@ -435,8 +451,8 @@ rotr(T x, size_t n)
 
 /// Resilient bitmask that accept parameters producing clipped bitmask
 template<typename T>
-inline constexpr concepts::if_unsigned_t<T>
-bitmask(size_t n, size_t pos = 0)
+inline CPP14_CONSTEXPR concepts::if_unsigned_t<T>
+                       bitmask(size_t n, size_t pos = 0)
 {
     constexpr size_t bits = bitwidth<T>();
     assume(n <= bits, "n=%lu > bitwidth=%lu", n, bitwidth<T>());
@@ -446,8 +462,8 @@ bitmask(size_t n, size_t pos = 0)
 
 /// A bitmask assuming parameters for unclipped output
 template<typename T>
-inline constexpr concepts::if_unsigned_t<T>
-bitmask_unclipped(size_t n, size_t pos = 0)
+inline CPP14_CONSTEXPR concepts::if_unsigned_t<T>
+                       bitmask_unclipped(size_t n, size_t pos = 0)
 {
     constexpr size_t bits = bitwidth<T>();
     assume(n > 0, "zero weight mask");
@@ -475,8 +491,10 @@ peek_bitgroup(const Range& r, size_t n = 1, size_t pos = 0) noexcept -> decltype
     static constexpr size_t T_nbits   = bits::bitwidth<Result>();
     assume(n <= T_nbits, "mask weight=%lu > word capacity=%lu");
 
-    const auto [word_shift, bit_shift] = split_bitoffset<range_element_t>(pos);
-    const size_t shifted_end_bit       = bit_shift + n;
+    const auto   bit_offset      = split_bitoffset<range_element_t>(pos);
+    const auto   word_shift      = bit_offset.first;
+    const auto   bit_shift       = bit_offset.second;
+    const size_t shifted_end_bit = bit_shift + n;
     assume(word_shift + (shifted_end_bit > word_bits) < size(r),
            "peek bits past the end at word %lu >= size(r)=%lu",
            word_shift + (shifted_end_bit > word_bits),
@@ -512,8 +530,10 @@ poke_bitgroup(Range& r, value_t<Range> v, size_t n = 1, size_t pos = 0) -> declt
     constexpr size_t word_bits = bits::bitwidth<range_element_t>();
     assume(n <= word_bits, "mask weight=%lu > word capacity=%lu");
 
-    const auto [word_shift, bit_shift] = split_bitoffset<range_element_t>(pos);
-    const size_t shifted_end_bit       = bit_shift + n;
+    const auto   bit_offset      = split_bitoffset<range_element_t>(pos);
+    const auto   word_shift      = bit_offset.first;
+    const auto   bit_shift       = bit_offset.second;
+    const size_t shifted_end_bit = bit_shift + n;
     assume(word_shift + (shifted_end_bit > word_bits) < size(r),
            "peek bits past the end at word %lu >= size(r)=%lu",
            word_shift + (shifted_end_bit > word_bits),
@@ -541,7 +561,8 @@ inline CPP14_CONSTEXPR concepts::if_unsigned_t<T>
     T      mask  = ~T(0);
 
     // First, try to use specialized instr for byte order reversal
-    if constexpr (group_bits <= 8 && bitwidth<T>() > 1) {
+    CPP17_IF_CONSTEXPR(group_bits <= 8 && bitwidth<T>() > 1)
+    {
         v = details::bswap(v);
         // Update the mask for byte width: 0xff00ff00...
         while (level > CHAR_BIT) {
@@ -595,6 +616,8 @@ tile_bitgroup(T v) -> concepts::if_unsigned_t<T>
     return v;
 }
 
-} // namespace gatbl::bits
+} // namespace bits
+
+} // namespace gatbl
 
 #endif // GATBL_BITS_HPP
