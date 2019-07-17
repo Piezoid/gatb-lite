@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <climits>
+#include <cmath>
 #include <tmmintrin.h>
 
 #include <limits>
@@ -344,12 +345,128 @@ to_string(const sized_kmer<kmer_t, ksize_t>& kmer)
     return kmer2str(kmer.kmer, kmer.size);
 }
 
-template<typename kmer_t = kmer_t, typename ksize_t = ksize_t>
-std::ostream&
-operator<<(std::ostream& out, const sized_kmer<kmer_t, ksize_t>& kmer)
+template<typename KmerT, typename From = KmerT, bool masking = true> struct sub_kextractor
 {
-    return out << to_string(kmer);
-}
+    using kmer_t       = KmerT;
+    using sized_kmer_t = sized_kmer<kmer_t>;
+
+    sub_kextractor(ksize_t k, ksize_t offset)
+      : mask_(bits::bitmask<From>(2 * k, 2 * offset))
+      , shift_(2 * offset)
+      , k_(k)
+    {
+        assert(2 * (k + offset) <= CHAR_BIT * sizeof(From), "k too large");
+    }
+
+    ksize_t size() const { return k_; }
+
+    ksize_t bits() const { return 2 * k_; }
+
+    size_t image_size() const { return size_t(mask_ >> shift_) + 1; }
+
+    sized_kmer_t operator()(no_conversion_kmer<From> kmer) const
+    {
+        return sized_kmer_t{kmer_t(mask(kmer) >> shift_), k_};
+    }
+
+    ssize_t compare(no_conversion_kmer<From> a, no_conversion_kmer<From> b) const { return ssize_t(mask(a)) - mask(b); }
+
+  protected:
+    From mask(From x) const
+    {
+        if (masking) {
+            return x & mask_;
+        } else {
+            assert(x <= this->mask_, "kmer larger than max value");
+            return x;
+        }
+    }
+
+    From    mask_;
+    ksize_t shift_, k_;
+};
+
+template<typename KmerT, typename From, bool masking = true> struct suffix_kextractor
+{
+    using kmer_t       = KmerT;
+    using sized_kmer_t = sized_kmer<kmer_t>;
+
+    suffix_kextractor(ksize_t k)
+      : mask_(bits::bitmask<kmer_t>(2 * k))
+      , k_(k)
+    {
+        assert(2 * k <= CHAR_BIT * sizeof(kmer_t), "k too large");
+    }
+
+    ksize_t size() const { return k_; }
+
+    ksize_t bits() const { return 2 * k_; }
+
+    size_t image_size() const { return size_t(mask_) + 1; }
+
+    sized_kmer_t operator()(no_conversion_kmer<From> kmer) const { return {mask(kmer), k_}; }
+
+    ssize_t compare(no_conversion_kmer<From> a, no_conversion_kmer<From> b) const
+    {
+        return typename std::make_signed<From>::type(mask(a)) - mask(b);
+    }
+
+  protected:
+    kmer_t mask(From x) const
+    {
+        if (masking) {
+            return x & mask_;
+        } else {
+            assert(x <= this->mask_, "kmer larger than max value");
+            return x;
+        }
+    }
+
+    kmer_t  mask_;
+    ksize_t k_;
+};
+
+template<typename KmerT, typename From, bool masking = false> struct prefix_kextractor
+{
+    using kmer_t       = KmerT;
+    using sized_kmer_t = sized_kmer<kmer_t>;
+
+    prefix_kextractor(ksize_t k, ksize_t offset)
+      : mask_(bits::bitmask<kmer_t>(2 * k))
+      , shift_(2 * offset)
+      , k_(k)
+    {
+        assert(2 * (k + offset) <= CHAR_BIT * sizeof(From), "k too large");
+    }
+
+    ksize_t size() const { return k_; }
+
+    ksize_t bits() const { return 2 * k_; }
+
+    size_t image_size() const { return mask_ + 1; }
+
+    sized_kmer_t operator()(no_conversion_kmer<From> kmer) const { return sized_kmer_t{mask(kmer >> shift_), k_}; }
+
+    ssize_t compare(no_conversion_kmer<From> a, no_conversion_kmer<From> b) const
+    {
+        // FIXME: performance
+        return ssize_t(mask(a >> shift_)) - ssize_t(mask(b >> shift_));
+    }
+
+  protected:
+    kmer_t mask(From x) const
+    {
+        if (masking) {
+            return x & mask_;
+        } else {
+            assert(x <= this->mask_, "kmer larger than max value");
+            return x;
+        }
+    }
+
+    KmerT   mask_;
+    ksize_t shift_, k_;
+};
 
 namespace details {
 
@@ -814,6 +931,55 @@ struct map_window
     using value_type = decltype(std::declval<Functor>()(*std::declval<Base>()));
 
     value_type operator*() { return Functor::operator()(Base::operator*()); }
+};
+
+/// Compute 2-mer entropy inside kmer for complexity filtering
+/// The log2 entropy ranges from 0 to 4
+template<typename kmer_t = kmer_t> class entropy_filter
+{
+    using lktnum_t                        = uint16_t;
+    static constexpr double     precision = std::numeric_limits<lktnum_t>::max() * 1.884169; // * exp(1)/log(2)
+    std::unique_ptr<lktnum_t[]> _xlogx_lkt;
+    const size_t                _threshold;
+    const ksize_t               _n;
+
+    size_t hot_fun _entropy(kmer_t kmer) const
+    {
+        uint8_t counts[16] = {0};
+
+        for (int i = 0; i < _n; i++) {
+            counts[kmer & kmer_t(15u)]++;
+            kmer >>= 2;
+        }
+        assume(kmer < 4, "kmer larger than expected"); // A single base should remain
+
+        size_t ent = 0;
+        for (int i = 0; i < 16; i++) {
+            assume(counts[i] <= _n, "count out of range");
+            ent += _xlogx_lkt[counts[i]];
+        }
+
+        return ent;
+    }
+
+  public:
+    cold_fun entropy_filter(ksize_t k, double threshold = 3)
+      : _threshold(threshold * precision)
+      , _n(k - 1) // Number of 2-mers
+    {
+        // Tabulate the -p*log2(p) values
+        _xlogx_lkt     = make_unique<lktnum_t[]>(_n + 1);
+        _xlogx_lkt[0]  = 0;
+        _xlogx_lkt[_n] = 0;
+        for (int i = 1; i < _n; i++) {
+            double p      = i / double(_n);
+            _xlogx_lkt[i] = lktnum_t(-log2(p) * p * precision);
+        }
+    }
+
+    double entropy(kmer_t kmer) const { return double(_entropy(kmer)) / precision; }
+
+    bool hot_fun operator()(kmer_t kmer) const { return _entropy(kmer) >= _threshold; }
 };
 
 /// A functor returning a kmer along with it's hash with an ordering based on the hash
