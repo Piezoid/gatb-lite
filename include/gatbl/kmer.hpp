@@ -302,8 +302,8 @@ inline uint32_t pure_fun hot_fun
 }
 
 template<typename T>
-constexpr inline T
-get_kmer(T kmer)
+constexpr inline auto
+get_kmer(T kmer) -> decltype(concepts::RawKmer(kmer))
 {
     return kmer;
 }
@@ -337,6 +337,32 @@ get_kmer(sized_kmer<T> sz_kmer) -> decltype(get_kmer(sz_kmer.kmer))
     return get_kmer(sz_kmer.kmer);
 }
 
+template<typename kmer_t = kmer_t, typename ksize_t = ksize_t>
+std::string
+to_string(const sized_kmer<kmer_t, ksize_t>& kmer)
+{
+    return kmer2str(kmer.kmer, kmer.size);
+}
+
+template<typename kmer_t = kmer_t, typename ksize_t = ksize_t>
+std::ostream&
+operator<<(std::ostream& out, const sized_kmer<kmer_t, ksize_t>& kmer)
+{
+    return out << to_string(kmer);
+}
+
+namespace details {
+
+/// Allows to compare things under a mapping object with a compare(x,y) function
+template<typename Extractor, typename T> struct extracted_comparator
+{
+    const Extractor& ex;
+    bool             operator()(const T& a, const T& b) { return this->ex.compare(a, b) < 0; }
+};
+} // namespace details
+
+/// k-mer with a position in sequence
+/// Defines an ordiering on the k-mer first, then the position
 template<typename T> struct packed_layout positioned
 {
     T      data;
@@ -351,13 +377,10 @@ template<typename T> struct packed_layout positioned
         return likely(delta != 0) ? delta < 0 : this->pos < other.pos;
     }
 
-    template<typename Extractor> static auto get_comparator(const Extractor& ex)
+    template<typename Extractor>
+    static details::extracted_comparator<Extractor, positioned<T>> get_comparator(const Extractor& ex)
     {
-        return [ex](const positioned& a, const positioned& b) {
-            auto delta = ex.compare(a.data, b.data);
-            static_assert(std::is_signed<decltype(delta)>::value, "unsigned substraction result");
-            return likely(delta != 0) ? delta < 0 : a.pos < b.pos;
-        };
+        return {ex};
     }
 };
 
@@ -368,19 +391,18 @@ get_kmer(positioned<T> pos_kmer) -> decltype(get_kmer(pos_kmer.data))
     return get_kmer(pos_kmer.data);
 }
 
-template<typename kmer_t = kmer_t, typename ksize_t = ksize_t>
-std::string
-to_string(const sized_kmer<kmer_t, ksize_t>& kmer)
+namespace details {
+template<typename Extractor, typename T> struct extracted_comparator<Extractor, positioned<T>>
 {
-    return kmer2str(kmer.kmer, kmer.size);
-}
-
-template<typename kmer_t = kmer_t, typename ksize_t = ksize_t>
-std::ostream&
-operator<<(std::ostream& out, const sized_kmer<kmer_t, ksize_t>& kmer)
-{
-    return out << to_string(kmer);
-}
+    const Extractor& ex;
+    bool             operator()(const positioned<T>& a, const positioned<T>& b)
+    {
+        auto delta = ex.compare(a.data, b.data);
+        static_assert(std::is_signed<decltype(delta)>::value, "unsigned substraction result");
+        return likely(delta != 0) ? delta < 0 : a.pos < b.pos;
+    }
+};
+} // namespace details
 
 namespace details {
 
@@ -564,7 +586,7 @@ template<typename R, typename _iterator_wrapper> struct wrapped_range
     R repr; // left public for brace initialization
 };
 
-}
+} // namespace details
 
 using dna_bitstring_iter                       = details::random_iter_wrapper<details::dna_bitstring_iter_base>;
 template<typename It> using dna_ascii_iter     = details::random_iter_wrapper<details::dna_ascii_iter_base<It>>;
