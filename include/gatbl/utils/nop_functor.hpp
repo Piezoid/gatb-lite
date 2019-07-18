@@ -9,7 +9,7 @@ struct nop_functor
     nop_functor(nop_functor&&) noexcept      = default;
     nop_functor(const nop_functor&) noexcept = default;
 
-    template<typename... Args> void operator()(Args...) const noexcept {}
+    template<typename... Args> bool operator()(Args&&...) const noexcept { return true; }
 };
 
 }

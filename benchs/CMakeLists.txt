@@ -28,5 +28,5 @@ target_link_libraries(benchs benchmark_main)
 
 add_executable(counter "counter.cpp")
 target_link_libraries(counter -lpthread -lrt -lz)
-add_executable(read_superkmers "read_superkmers.cpp")
-target_link_libraries(read_superkmers -lpthread  -lz)
+#add_executable(read_superkmers "read_superkmers.cpp")
+#target_link_libraries(read_superkmers -lpthread  -lz)
