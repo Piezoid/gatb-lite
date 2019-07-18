@@ -9,30 +9,35 @@
 #include <gatbl/fastx.hpp>
 
 namespace gatbl {
-/// Convert sequence to kmers, with capabilities to avoid invalid chars and multiline FASTA
-template<typename KmerT = kmer_t, typename OnKmer = nop_functor, typename OnRunEnd = nop_functor> struct sequence2kmers
+
+namespace details {
+
+/// A high level fastx to kmers
+/// It handles fastq, genomic multiline fasta parsing and the presence of invalid nucleotide in the range
+template<typename Derived,                     // CRTP Derived type
+         typename Window = kmer_window<kmer_t> // Window used to accumulate nucleotides
+         >
+struct sequence2kmers_base : private Window
 {
-    using kmer_t = KmerT;
-    using arg_t  = positioned<sized_kmer<kmer_t>>;
-
-    sequence2kmers(ksize_t k, OnKmer&& on_kmer = {}, OnRunEnd&& on_run_end = {})
-
-      : _window(k)
-      , _window_unfilled_nucs(_window.size())
-      , _on_kmer(std::move(on_kmer))
-      , _on_run_end(std::move(on_run_end))
+    template<typename W>
+    sequence2kmers_base(W&& w)
+      : Window(std::forward<W>(w))
+      , _unfilled_nucs(Window::size())
     {}
 
-    // Push a sequence string
+    using window_t = Window;
+    using typename Window::value_type;
+    using Window::size;
 
-    template<typename R> void feed(const R& r)
+    /// Push a sequence string
+    /// This can be called multiple times for multiple parts of a single sequence
+    template<typename R> void feed(R&& r)
     {
         dna_ascii_range<R> seq(r);
-        // debug_op(std::cerr << "s: " << r << endl);
 
         auto       it   = begin(seq);
         const auto last = end(seq);
-        if (unlikely(_window_unfilled_nucs != 0)) it = fill(it, last);
+        if (unlikely(_unfilled_nucs != 0)) it = fill(it, last);
 
         for (; it != last;) {
             while (unlikely(*it == nuc_t::N)) {
@@ -41,25 +46,23 @@ template<typename KmerT = kmer_t, typename OnKmer = nop_functor, typename OnRunE
                 if (it == last) return;
             }
 
-            _window.push_back(*it);
-            ++_pos;
+            Window::push_back(*it);
             ++it;
+            ++_pos;
 
-            _on_kmer(arg_t{_window.forward(), _pos});
+            derived().on_kmer();
         }
     }
 
-    // Get the position of the next nucleotide
-    size_t get_next_pos() const { return _pos; }
-
-    // Signal the start of a chromosome/FASTA/Q sequence
+    /// Signal the start of new a chromosome/read
     void next_chrom()
     {
-        _chrom_starts.push_back(_pos);
+        derived().on_chrom();
         empty_window();
     }
 
-    void read_fastx(const std::string fin)
+    /// Read a fasta or a fastx and feeds all the reads
+    void read_fastx(const std::string& fin)
     {
         gatbl::sys::file_descriptor fd(fin);
         auto                        content = fd.mmap<const char>();
@@ -74,7 +77,7 @@ template<typename KmerT = kmer_t, typename OnKmer = nop_functor, typename OnRunE
         } else if (hasEnding(fin, ".fa") || hasEnding(fin, ".fasta")) {
             RANGES_FOR(auto& line, sequence_range<line_record<>>(content))
             {
-                if (unlikely(size(line) == 0)) continue;
+                if (unlikely(gatbl::size(line) == 0)) continue;
                 auto it = begin(line);
                 if (*it != '>') {
                     feed(line);
@@ -88,54 +91,102 @@ template<typename KmerT = kmer_t, typename OnKmer = nop_functor, typename OnRunE
         }
     }
 
-    // std::vector<size_t>&&      get_chrom_starts() && { return std::move(_chrom_starts); }
-    std::vector<size_t>&       get_chrom_starts() { return _chrom_starts; }
-    const std::vector<size_t>& get_chrom_starts() const { return _chrom_starts; }
+    /// Get the position of the next nucleotide to be added to the window, in global coordinates (for all
+    /// reads/chrom)
+    size_t get_next_pos() const { return _pos; }
+
+    /// Get the position at the left of the first kmer (enough sequence must be fed before)
+    size_t get_pos() const
+    {
+        assert(_pos >= Window::size(), "Invalid position, is the window filled ?");
+        return _pos - Window::size();
+    }
+
+    const Window& get_window() const { return static_cast<const Window&>(*this); }
 
   protected:
     void empty_window()
     {
-        if (_window_unfilled_nucs == 0) { // We had a kmer
-            _on_run_end(arg_t{_window.forward(), _pos});
+        if (_unfilled_nucs == 0) { // We had a valid kmer
+            derived().on_run_end();
         }
-        _window_unfilled_nucs = _window.size();
+        _unfilled_nucs = Window::size();
     }
 
     /// Fill the kmer window at the begining of a line or after Ns.
-    /// Filling can be done in mulitple call (eg when Ns span multiple lines)
+    /// Filling can be done in multople call (eg. when Ns span multiple lines)
     template<typename It, typename S> It fill(It it, const S last)
     {
-        for (; _window_unfilled_nucs > 0 && it != last; ++it, ++_pos) {
+        for (; _unfilled_nucs > 0 && it != last; ++it, ++_pos) {
             if (*it == nuc_t::N) { // Ns likely to follow N
                 empty_window();
             } else {
-                _window.unchecked_push_back(*it);
-                --_window_unfilled_nucs;
+                Window::unchecked_push_back(*it);
+                --_unfilled_nucs;
             }
         }
-        if (_window_unfilled_nucs == 0) {
-            _window.mask(true);
-            _window.check();
-            _on_kmer(arg_t{_window.forward(), _pos});
+        if (_unfilled_nucs == 0) {
+            Window::mask(true);
+            Window::check();
+            derived().on_kmer();
         }
         return it;
     }
 
-    std::vector<size_t> _chrom_starts;
-    kmer_window<kmer_t> _window;
-    size_t              _pos = 0;
-    ksize_t             _window_unfilled_nucs;
-    OnKmer              _on_kmer;
-    OnRunEnd            _on_run_end;
+  private:
+    Derived& derived() { return static_cast<Derived&>(*this); }
+    Derived& derived() const { return static_cast<Derived&>(*this); }
+
+    size_t  _pos = 0;
+    ksize_t _unfilled_nucs;
 };
 
-template<typename KmerT = kmer_t, typename OnKmer = nop_functor, typename OnRunEnd = nop_functor>
-sequence2kmers<KmerT, remove_reference_t<OnKmer>, remove_reference_t<OnRunEnd>>
-make_sequence2kmers(ksize_t k, OnKmer&& on_kmer = {}, OnRunEnd&& on_run_end = {})
-{
-    return {k, std::forward<OnKmer>(on_kmer), std::forward<OnRunEnd>(on_run_end)};
-}
+} // namespace details
 
+/// Convert sequence to kmers, with capabilities to avoid invalid chars and multiline FASTA
+template<typename Window   = kmer_window<kmer_t>,
+         typename OnKmer   = nop_functor, // Lambda called with windows when a new kmer is seen
+         typename OnChrom  = nop_functor, // Lambda called with the last position before another sequence
+         typename OnRunEnd = nop_functor  // Lambda called with the last kmer just before
+                                          // the end of a sequence or a invalide nucleotide
+         >
+class sequence2kmers : public details::sequence2kmers_base<sequence2kmers<Window, OnKmer, OnChrom, OnRunEnd>, Window>
+{
+    using base = details::sequence2kmers_base<sequence2kmers<Window, OnKmer, OnChrom, OnRunEnd>, Window>;
+
+    friend base;
+    void on_kmer() { _on_kmer(as_ref()); }
+    void on_run_end() { _on_run_end(as_ref()); }
+    void on_chrom() { _on_chrom(as_ref()); }
+
+    OnKmer   _on_kmer;
+    OnChrom  _on_chrom;
+    OnRunEnd _on_run_end;
+
+  public:
+    template<typename W>
+    sequence2kmers(W&& w, OnKmer&& on_kmer = {}, OnChrom&& on_chrom = {}, OnRunEnd&& on_run_end = {})
+      : base(w)
+      , _on_kmer(std::forward<OnKmer>(on_kmer))
+      , _on_chrom(std::forward<OnChrom>(on_chrom))
+      , _on_run_end(std::forward<OnRunEnd>(on_run_end))
+    {}
+
+    const sequence2kmers& as_ref() const { return *this; }
+};
+
+template<typename Window   = kmer_window<kmer_t>,
+         typename OnKmer   = nop_functor,
+         typename OnChrom  = nop_functor,
+         typename OnRunEnd = nop_functor>
+sequence2kmers<Window, OnKmer, OnChrom, OnRunEnd>
+make_sequence2kmers(Window&& w, OnKmer&& on_kmer = {}, OnChrom&& on_chrom = {}, OnRunEnd&& on_run_end = {})
+{
+    return {std::forward<Window>(w),
+            std::forward<OnKmer>(on_kmer),
+            std::forward<OnChrom>(on_chrom),
+            std::forward<OnRunEnd>(on_run_end)};
+}
 }
 
 #endif // GATBL_FASTX2KMER_HPP
