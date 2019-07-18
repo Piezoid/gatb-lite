@@ -489,8 +489,7 @@ template<typename T> struct packed_layout positioned
 
     bool operator<(const positioned& other) const
     {
-        auto delta = this->data - other.data;
-        static_assert(std::is_signed<decltype(delta)>::value, "unsigned substraction result");
+        ssize_t delta = ssize_t(data) - ssize_t(other.data);
         return likely(delta != 0) ? delta < 0 : this->pos < other.pos;
     }
 
@@ -678,8 +677,11 @@ template<typename R, typename _iterator_wrapper> struct wrapped_range
     using reference    = typename iterator::reference;
     using size_type    = size_t;
 
-    iterator  begin() const { return _iterator_wrapper(gatbl::begin(repr)); }
-    iterator  end() const { return _iterator_wrapper(gatbl::end(repr)); }
+    iterator begin() const { return _iterator_wrapper(gatbl::begin(repr)); }
+    iterator end() const { return _iterator_wrapper(gatbl::end(repr)); }
+    iterator begin() { return _iterator_wrapper(gatbl::begin(repr)); }
+    iterator end() { return _iterator_wrapper(gatbl::end(repr)); }
+
     reference operator[](size_type i) const
     {
         assume(repr.begin() + i < repr.end(), "Past the end index");

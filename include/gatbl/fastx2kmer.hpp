@@ -19,46 +19,81 @@ template<typename Derived,                     // CRTP Derived type
          >
 struct sequence2kmers_base : private Window
 {
-    template<typename W>
-    sequence2kmers_base(W&& w)
-      : Window(std::forward<W>(w))
-      , _unfilled_nucs(Window::size())
-    {}
-
     using window_t = Window;
     using typename Window::value_type;
     using Window::size;
+
+    template<typename W>
+    sequence2kmers_base(W&& w)
+      : window_t(std::forward<W>(w))
+      , _unfilled_nucs(window_t::size())
+    {}
+
+    ~sequence2kmers_base() { clear(); }
+
+    void clear()
+    {
+        empty_window();
+        _pos = 0;
+    }
 
     /// Push a sequence string
     /// This can be called multiple times for multiple parts of a single sequence
     template<typename R> void feed(R&& r)
     {
-        dna_ascii_range<R> seq(r);
+        ksize_t       unfilled_nucs = _unfilled_nucs;
+        const ksize_t window_size   = window_t::size();
 
-        auto       it   = begin(seq);
-        const auto last = end(seq);
-        if (unlikely(_unfilled_nucs != 0)) it = fill(it, last);
+        for (nuc_t n : dna_ascii_range<R>(std::forward<R>(r))) {
+            if (unlikely(n == nuc_t::N)) { // Invalid nucletoide
+                if (unfilled_nucs == 0) {  // We had a valid kmer
+                    derived().on_run_end();
+                }
+                unfilled_nucs = window_size;
 
-        for (; it != last;) {
-            while (unlikely(*it == nuc_t::N)) {
-                empty_window();
-                it = fill(it, last);
-                if (it == last) return;
+                ++_pos;
+                continue;
+            } else if (unlikely(unfilled_nucs > 0)) { // Window not full
+                Window::unchecked_push_back(n);
+                if (--unfilled_nucs > 0) {
+                    ++_pos;
+                    continue;
+                } else { // The window is now full
+                    Window::mask(true);
+                    Window::check();
+                }
+            } else { // Slide a full window
+                Window::push_back(n);
             }
-
-            Window::push_back(*it);
-            ++it;
             ++_pos;
-
             derived().on_kmer();
         }
+        _unfilled_nucs = unfilled_nucs;
     }
 
-    /// Signal the start of new a chromosome/read
-    void next_chrom()
+    /// Advance position by the length of the sequence
+    template<typename R> void skip(R&& r)
     {
-        derived().on_chrom();
+        assert(_unfilled_nucs == window_t::size(), "window is not empty, call next_chrom() first");
+        using gatbl::size;
+        _pos += size(r);
+    }
+
+    /// Signal the start of new a chromosome/read, returns true if on_chrom() choose to keep it
+    bool start()
+    {
         empty_window();
+        return derived().on_chrom();
+    }
+
+    // Adds a full sequence
+    template<typename R> void sequence(R&& r)
+    {
+        if (start()) {
+            feed(std::forward<R>(r));
+        } else {
+            skip(std::forward<R>(r));
+        }
     }
 
     /// Read a fasta or a fastx and feeds all the reads
@@ -69,21 +104,22 @@ struct sequence2kmers_base : private Window
         content.advise_hugepage();
 
         if (hasEnding(fin, ".fq") || hasEnding(fin, ".fastq")) {
-            RANGES_FOR(auto& rec, sequence_range<fastq_record<>>(content))
-            {
-                next_chrom();
-                feed(rec.sequence());
-            }
+            RANGES_FOR(auto& rec, sequence_range<fastq_record<>>(content)) { sequence(rec.sequence()); }
         } else if (hasEnding(fin, ".fa") || hasEnding(fin, ".fasta")) {
+            bool dontskip = false;
             RANGES_FOR(auto& line, sequence_range<line_record<>>(content))
             {
                 if (unlikely(gatbl::size(line) == 0)) continue;
                 auto it = begin(line);
                 if (*it != '>') {
-                    feed(line);
+                    if (dontskip) {
+                        feed(line);
+                    } else {
+                        skip(line);
+                    }
                 } else {
                     ++it;
-                    next_chrom();
+                    dontskip = start();
                 }
             }
         } else {
@@ -102,7 +138,7 @@ struct sequence2kmers_base : private Window
         return _pos - Window::size();
     }
 
-    const Window& get_window() const { return static_cast<const Window&>(*this); }
+    const window_t& get_window() const { return static_cast<const window_t&>(*this); }
 
   protected:
     void empty_window()
@@ -110,27 +146,7 @@ struct sequence2kmers_base : private Window
         if (_unfilled_nucs == 0) { // We had a valid kmer
             derived().on_run_end();
         }
-        _unfilled_nucs = Window::size();
-    }
-
-    /// Fill the kmer window at the begining of a line or after Ns.
-    /// Filling can be done in multople call (eg. when Ns span multiple lines)
-    template<typename It, typename S> It fill(It it, const S last)
-    {
-        for (; _unfilled_nucs > 0 && it != last; ++it, ++_pos) {
-            if (*it == nuc_t::N) { // Ns likely to follow N
-                empty_window();
-            } else {
-                Window::unchecked_push_back(*it);
-                --_unfilled_nucs;
-            }
-        }
-        if (_unfilled_nucs == 0) {
-            Window::mask(true);
-            Window::check();
-            derived().on_kmer();
-        }
-        return it;
+        _unfilled_nucs = window_t::size();
     }
 
   private:
@@ -157,7 +173,9 @@ class sequence2kmers : public details::sequence2kmers_base<sequence2kmers<Window
     friend base;
     void on_kmer() { _on_kmer(as_ref()); }
     void on_run_end() { _on_run_end(as_ref()); }
-    void on_chrom() { _on_chrom(as_ref()); }
+    bool on_chrom() { return _on_chrom(as_ref()); }
+
+    const sequence2kmers& as_ref() const { return *this; }
 
     OnKmer   _on_kmer;
     OnChrom  _on_chrom;
@@ -172,7 +190,11 @@ class sequence2kmers : public details::sequence2kmers_base<sequence2kmers<Window
       , _on_run_end(std::forward<OnRunEnd>(on_run_end))
     {}
 
-    const sequence2kmers& as_ref() const { return *this; }
+    // We don't want functors to make accidental copies (infinite recursion)
+    sequence2kmers(const sequence2kmers&) = delete;
+    sequence2kmers& operator=(const sequence2kmers&) = delete;
+    sequence2kmers(sequence2kmers&&)                 = default;
+    sequence2kmers& operator=(sequence2kmers&&) = default;
 };
 
 template<typename Window   = kmer_window<kmer_t>,
