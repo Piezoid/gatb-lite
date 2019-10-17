@@ -1,0 +1,21 @@
+find_library(CATCH_LIBRARY NAMES Catch2)
+if(NOT CATCH_LIBRARY AND ${BUILD_TESTING})
+    FILE(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/catch" catch_project_dir)
+    if(NOT EXISTS "${catch_project_dir}/CMakeLists.txt")
+        execute_process(COMMAND git submodule update --init -- ${catch_project_dir}
+                        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
+    option(BENCHMARK_ENABLE_TESTING "Enable testing of the benchmark library." OFF)
+    add_subdirectory(${catch_project_dir})
+    set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${catch_project_dir}/contrib" PARENT_SCOPE)
+endif()
+
+find_library(BENCHMARK_LIBRARY NAMES benchmark)
+if(NOT BENCHMARK_LIBRARY)
+    FILE(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/benchmark" benchmark_project_dir)
+    if(NOT EXISTS "${benchmark_project_dir}/CMakeLists.txt")
+        execute_process(COMMAND git submodule update --init -- ${benchmark_project_dir}
+                        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    endif()
+    add_subdirectory(${benchmark_project_dir} EXCLUDE_FROM_ALL)
+endif()
