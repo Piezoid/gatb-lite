@@ -30,7 +30,7 @@ print_backtrace()
     backtrace_symbols_fd(array, size, 2);
 }
 
-#include "catch.hpp"
+#include "catch2/catch.hpp"
 #include "gatbl/scheduler.hpp"
 #include "gatbl/sys/exceptions.hpp"
 #include "test_utils.hpp"
