@@ -86,9 +86,15 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
     /// Type of the finish handler. Expected to be set by the function. Called when the reference count reaches 0.
     using finish_handler_ptr = void (*)(void*) CPP17_NOEXCEPT;
 
+    union code_ptr
+    {
+        func_ptr           job_body;
+        finish_handler_ptr finish;
+    };
+
   private:
     static constexpr size_t data_size
-      = cache_lines * hardware_destructive_interference_size - sizeof(std::atomic<size_t>) - sizeof(func_ptr);
+      = cache_lines * hardware_destructive_interference_size - sizeof(std::atomic<size_t>) - sizeof(code_ptr);
     template<typename F> using data_wrapper = memory::bounded_size_wrapper<F, data_size>;
 
     alignas(hardware_destructive_interference_size) char _data[data_size];
@@ -97,7 +103,7 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
     // _state_idx = 0 is empty job ready to be allocated in the pool
     // _state_idx = 1 is a job being finished
     // _state_idx = 1 + n is scheduled job with (n-1) alive references
-    func_ptr _function = nullptr;
+    code_ptr _code = {nullptr};
 
     /// Decrement the state counter
     void release() noexcept
@@ -120,10 +126,10 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
             std::atomic_thread_fence(std::memory_order_acquire);
             // Publishing _state_idx == 1 allows to postpone the reuse of the pool's slot while running the
             // completion chain.
-            if (_function != nullptr) {
+            if (_code.finish != nullptr) {
                 // Call the completion handler
-                reinterpret_cast<finish_handler_ptr>(_function)(_data);
-                if (DEBUG) _function = nullptr;
+                _code.finish(_data);
+                if (DEBUG) _code = {nullptr};
             }
 
             // Mark the job as finished so it can be reallocated.
@@ -182,17 +188,17 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
             // Precondition : have a function defined and alive jobrefs
             assert(s._state_idx.load(std::memory_order_acquire) >= 2, "Trying to run a disowned job");
             assert(*this, "Trying to run an empty job");
-            s._function(std::move(*this), std::forward<Args>(args)...);
+            s._code.job_body(std::move(*this), std::forward<Args>(args)...);
         }
 
         /// A very basic initializer for the job for raw function pointers
         /// NB: the _function must call onfinish before returning !
-        void init(func_ptr f) { slot()._function = f; }
+        void init(func_ptr f) { slot()._code.job_body = f; }
 
         /// Set the finish/join handler of the job. It is executed when the last reference to the job is destructed.
         /// This must be called before the job's function returns
         /// If the function is null, no action is taken.
-        void onfinish(finish_handler_ptr finish = nullptr) { slot()._function = reinterpret_cast<func_ptr>(finish); }
+        void onfinish(finish_handler_ptr finish = nullptr) { slot()._code.finish = finish; }
 
       public:
         /// An empty jobref not referencing any jobconst
@@ -257,7 +263,7 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
         }
     };
 
-    /// Typed interface over a job token: allows to access and mutate the slot content as a Functor instance
+    /// Typed interface over a job token: allows to access and mutate the slot content as an F instance
     template<typename F, typename Base = jobtoken> class typed : public Base
     {
         using data_t = data_wrapper<F>;
@@ -266,7 +272,7 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
       protected:
         /// Downcasting from an untyped token: as dangerous as reinterpret_cast !
         template<typename... _Args>
-        typed(_Args&&... args)
+        explicit typed(_Args&&... args)
           : Base(std::forward<_Args>(args)...)
         {}
 
@@ -279,13 +285,13 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
         /// Additionally a join handler can be specified as a member function, called before destruction
         template<void (F::*finish_member_ptr)() = nullptr> void onfinish()
         {
-            finish_handler_ptr finish = nullptr;
-            if (finish_member_ptr != nullptr || not std::is_trivially_destructible<data_t>::value)
-                finish = [](void* ptr) noexcept
-                {
+            constexpr bool     trivially_destructible = std::is_trivially_destructible<data_t>::value;
+            finish_handler_ptr finish                 = nullptr;
+            if (finish_member_ptr != nullptr || not trivially_destructible)
+                finish = [](void* ptr) noexcept {
                     auto& data = *reinterpret_cast<data_t*>(ptr);
                     if (finish_member_ptr != nullptr) { (data.get().*finish_member_ptr)(); }
-                    if (not std::is_trivially_destructible<data_t>::value) { data.~data_t(); }
+                    if (not trivially_destructible) { data.~data_t(); }
                 };
             Base::onfinish(finish);
         }
@@ -293,7 +299,7 @@ class alignas(hardware_destructive_interference_size) jobslot<void(Args...), cac
         /// An example of job initialization that can be achieved with the above mutators
         template<typename... ConstrArgs> void init(ConstrArgs&&... args)
         {
-            Base::init([](jobtoken token, Args... args) noexcept {
+            Base::init([](jobtoken token, Args...) noexcept {
                 // In the function, the type of the functor is forgoten, so get it back by constructing a typed token of
                 // the right type
                 typed tytk(std::move(token));
@@ -573,7 +579,8 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
       protected:
         template<typename Tk>
         jobtoken(Tk&& from)
-          : base_jobtoken(std::forward<Tk>(from)){};
+          : base_jobtoken(std::forward<Tk>(from))
+        {}
 
         friend class worker;
         friend base_jobslot;
@@ -600,7 +607,7 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
 
         template<typename... Args> void init(Args&&... args)
         {
-            Base::init([](base_jobtoken token, worker & worker) noexcept {
+            Base::init([](base_jobtoken token, worker& worker) noexcept {
                 assume(token, "Job called with from an empty token");
                 typed<F, ctx> ctx(std::move(token), worker);
                 auto&         functor = ctx.functor();

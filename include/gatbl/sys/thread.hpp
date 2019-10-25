@@ -71,7 +71,7 @@ run_pinned_worker_pool(unsigned ncpu, const Args&&... args)
 
         // FIXME: correct alignement for overaligned types is only respected for after cpp17
         // auto worker = make_unique<Worker>(Args(static_cast<const Args&>(args))...);
-        Worker* worker;
+        Worker* worker = nullptr;
         sys::check_ret(posix_memalign(reinterpret_cast<void**>(&worker), alignof(Worker), sizeof(Worker)),
                        "Failled allocating aligned memory");
         new (worker) Worker(Args(static_cast<const Args&>(args))...);
