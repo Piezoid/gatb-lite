@@ -45,15 +45,11 @@ with_mut(F&& f)
     f();
 }
 
-static_assert(sizeof(std::atomic<uint16_t>) == 2);
-
 using namespace gatbl;
 using namespace gatbl::sched;
 
 SCENARIO("start wp")
 {
-
-    std::atomic<bool> running{true};
 
     using worker_t = worker<2, 5>;
 
@@ -66,7 +62,7 @@ SCENARIO("start wp")
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         assert(ctx.owners_count() == 2, "%lu", ctx.owners_count());
         for (unsigned i = 0; i < target_counts; i++)
-            ctx.subtask([&](worker_t::ctx ctx) {
+            ctx.subtask([&](worker_t::ctx) {
                 // std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 counter++;
             });
