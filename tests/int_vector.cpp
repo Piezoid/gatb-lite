@@ -124,7 +124,7 @@ SCENARIO("int_vector operations", "[int_vector]")
 {
     check_int_vector<bit_vector>(4096, {}, true);
     check_int_vector<twobit_dna_vector>(2048, {}, nuc_t(2));
-    check_int_vector<int_vector<details::packedint_spec<uint16_t, uint8_t, uint32_t>>>(512, 9, uint16_t(0x154));
+    check_int_vector<int_vector<packedint::specification<uint16_t, uint8_t, uint32_t>>>(512, 9, uint16_t(0x154));
     check_int_vector<int_vector<>>(256, 32, 0xdeadbeef);
     check_int_vector<int_vector<>>(1369, 11, 0x555);
     check_int_vector<int_vector<>>(128, 57, 0xfedcbadeadbeef);
@@ -179,7 +179,7 @@ SCENARIO("int_vector serialization", "[int_vector][serialization]")
 {
     check_int_vector_serialization<bit_vector>(4096, {});
     check_int_vector_serialization<twobit_dna_vector>(2048, {});
-    check_int_vector_serialization<int_vector<details::packedint_spec<uint16_t, uint8_t, uint32_t>>>(512, 9);
+    check_int_vector_serialization<int_vector<packedint::specification<uint16_t, uint8_t, uint32_t>>>(512, 9);
     check_int_vector_serialization<int_vector<>>(256, 32);
     check_int_vector_serialization<int_vector<>>(128, 57);
 }

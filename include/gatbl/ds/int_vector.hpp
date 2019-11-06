@@ -3,16 +3,17 @@
 
 #include "gatbl/utils/ranges.hpp"
 #include "gatbl/sys/bits.hpp"
-#include "gatbl/utils/dna.hpp" // For underlying type and dna enum
+#include "gatbl/utils/nucleotide.hpp" // For underlying type and dna enum
 
 namespace gatbl {
 
-namespace details {
+namespace packedint {
 
 using bits::bitsize_t;
 
-/// Represents the width in bits of integers, either dynamically or by a type constant
-template<typename WidthT = bitsize_t> class bitwidth
+/// Represents the width in bits of integers, either dynamically (following implementation) or by a type constant
+/// (specialization next bellow)
+template<typename WidthT = bitsize_t> class packed_layout bitwidth
 {
     static constexpr size_t width_bits = CHAR_BIT * sizeof(WidthT);
     static constexpr size_t width_mask = (size_t(1) << width_bits) - 1;
@@ -39,7 +40,7 @@ template<typename WidthT = bitsize_t> class bitwidth
 };
 
 /// Statically represents the width in bits of integers. Will occupy 0 bytes when used as a base class.
-template<typename WidthT, WidthT N> class bitwidth<std::integral_constant<WidthT, N>>
+template<typename WidthT, WidthT N> class packed_layout bitwidth<std::integral_constant<WidthT, N>>
 {
   public:
     constexpr bitwidth(std::integral_constant<WidthT, N> = {}) noexcept {}
@@ -55,15 +56,15 @@ template<typename WidthT, WidthT N> class bitwidth<std::integral_constant<WidthT
     constexpr size_t unpack_size_and_width(size_t size) const { return size; }
 };
 
-/// Specifies the representation for integers packed in memory
-/// Representatively isomorphic to bitwidth<WidthT>, but with helper methods
+/// Specifies the representation for packed integers in memory.
+/// Representatively isomorphic to bitwidth<WidthT>, but with helper methods for loading/storing packed integers.
 /// FIXME: this version relies heavilly on little-endian and unaligned word access: the implementation for other
 /// architectures is present but untested and probably ineficient.
-template<typename T      = size_t,              /// Value type.
-         typename WidthT = bitsize_t,           /// Type representing the integer width in bits,
-                                                /// can be std::integral_constant<uint8_t, N>.
-         typename WordT = size_t>               /// Word type loaded from memory (char-aligned!).
-struct packedint_spec : public bitwidth<WidthT> // bitwidth specification, EBOptimized
+template<typename T      = size_t,                           /// Value type.
+         typename WidthT = bitsize_t,                        /// Type representing the integer width in bits,
+                                                             /// can be std::integral_constant<uint8_t, N>.
+         typename WordT = size_t>                            /// Word type loaded from memory (char-aligned!).
+struct packed_layout specification : public bitwidth<WidthT> // bitwidth specification, EBOptimized
 {
     using base    = bitwidth<WidthT>;
     using width_t = WidthT;
@@ -73,7 +74,7 @@ struct packedint_spec : public bitwidth<WidthT> // bitwidth specification, EBOpt
     static constexpr bitsize_t word_bits  = sizeof(word_t) * CHAR_BIT;
     static constexpr bitsize_t offset_max = CHAR_BIT - 1;
 
-    CPP14_CONSTEXPR packedint_spec(WidthT width = {}) noexcept
+    CPP14_CONSTEXPR specification(WidthT width = {}) noexcept
       : base(width)
     {
         check_offset(offset_max);
@@ -121,52 +122,63 @@ struct packedint_spec : public bitwidth<WidthT> // bitwidth specification, EBOpt
     }
 };
 
-using dynamic_packed_int_spec               = packedint_spec<>;
-template<bitsize_t N> using static_bitwidth = std::integral_constant<bitsize_t, N>;
-using packed_twobit_spec                    = packedint_spec<nuc_t, static_bitwidth<2>>;
-using bit_spec                              = packedint_spec<bool, static_bitwidth<1>>;
+using dynamic_spec                      = specification<>;
+template<bitsize_t N> using static_spec = std::integral_constant<bitsize_t, N>;
+using twobit_spec                       = specification<nuc_t, static_spec<2>>;
+using bit_spec                          = specification<bool, static_spec<1>>;
 
 /// Base namespace declaring types for packed int containers
-template<typename Spec = dynamic_packed_int_spec> struct packedint_types
+template<typename Spec = dynamic_spec> struct types
 {
-    struct iterator;
-    struct reference;
-    struct const_iterator;
-    using const_reference = typename Spec::type;
-
-  protected:
+    using value_type = typename Spec::type;
+    using word_t     = typename Spec::word_t;
     using bitptr_t = std::ptrdiff_t; // An absolute bit address. A signed type allow arithmetic right shift to restore a
                                      // cannonical x86_64 pointer
+  protected:
+    template<typename D, typename Ref>
+    using it_facade = iterator_facade<D, std::random_access_iterator_tag, value_type, Ref, void, bitptr_t>;
 
     /// Common CRTP facade
     template<typename D, typename Ref>
-    class iterator_base
-      : public iterator_facade<D, std::random_access_iterator_tag, typename Spec::type, Ref, void, bitptr_t>
+    struct iterator_base
+      : it_facade<D, Ref>
       , protected Spec // bitwidth specification, EBOptimized
     {
+        using spec_t   = Spec;
+        using word_t   = types::word_t;
+        using bitptr_t = types::bitptr_t;
+
       protected:
-        using base = iterator_facade<D, std::random_access_iterator_tag, typename Spec::type, Ref, void, bitptr_t>;
-
         bitptr_t addr = 0;
-
 
       public:
         constexpr iterator_base() noexcept = default;
 
-        constexpr iterator_base(bitptr_t bitptr, Spec spec) noexcept
-          : Spec(spec)
+        /// Construct an interator at the i-th integer of width w in the buffer starting at position p
+        CPP14_CONSTEXPR iterator_base(const word_t* p, spec_t w = {}, size_t i = 0) noexcept
+          : iterator_base((reinterpret_cast<bitptr_t>(p) << 3) + bitptr_t(i * w.width()), w)
+        {
+            assume(spec_t::width() > 0, "Can't iterate integers of 0 width");
+        }
+
+        /// Return the packed integer specification, usually represents the integer width
+        constexpr spec_t packedint_spec() const noexcept { return *this; }
+
+        /// Signed value that represents the address to a single bit
+        constexpr bitptr_t bitptr() const noexcept { return addr; }
+
+        /// Bit offset in word where to extract value
+        constexpr bitsize_t bitoffset() const noexcept { return bitsize_t(addr & 7u); }
+
+        /// Construct an iterator from a bit address and packed integer specification (width)
+        constexpr iterator_base(bitptr_t bitptr, spec_t spec = {}) noexcept
+          : spec_t(spec)
           , addr(bitptr)
         {}
 
-        CPP14_CONSTEXPR iterator_base(const typename Spec::word_t* p, Spec w, size_t i = 0) noexcept
-          : iterator_base((reinterpret_cast<bitptr_t>(p) << 3) + bitptr_t(i * w.width()), w)
-        {
-            assume(Spec::width() > 0, "Can't iterate integers of 0 width");
-        }
-
         CPP14_CONSTEXPR D& operator+=(bitptr_t x) noexcept
         {
-            this->addr += x * Spec::width();
+            this->addr += x * spec_t::width();
             return static_cast<D&>(*this);
         }
 
@@ -177,54 +189,32 @@ template<typename Spec = dynamic_packed_int_spec> struct packedint_types
             return d;
         }
 
-        using base::             operator-;
-        CPP14_CONSTEXPR bitptr_t operator-(const D& other) const noexcept
+        using it_facade<D, Ref>::operator-;
+        CPP14_CONSTEXPR auto     operator-(const D& other) const noexcept
+          -> decltype(concepts::type_require<bitptr_t, const D&>(other))
         {
-            return compare(static_cast<const D&>(*this), other) / Spec::width();
+            return compare(static_cast<const D&>(*this), other) / spec_t::width();
         }
     };
-
-    using word_t = typename Spec::word_t;
 
   public:
-    struct const_iterator : iterator_base<const_iterator, const_reference>
-    {
-        /// Conversion from non-const iterator
-        constexpr const_iterator(const iterator& it) noexcept
-          : iterator_base<const_iterator, const_reference>(it.addr, it)
-        {}
-
-        using iterator_base<const_iterator, const_reference>::iterator_base;
-        constexpr const_reference operator*() const noexcept
-        {
-            return Spec::load(reinterpret_cast<const word_t*>(this->addr >> 3), bitsize_t(this->addr & 7u));
-        }
-    };
-
-    struct iterator : iterator_base<iterator, reference>
-    {
-        friend struct const_iterator;
-        using iterator_base<iterator, reference>::iterator_base;
-        constexpr reference operator*() const noexcept
-        {
-            return {reinterpret_cast<word_t*>(this->addr >> 3), bitsize_t(this->addr & 7u), *this};
-        }
-    };
-
+    struct iterator;
     struct reference : private Spec // bitwidth specification, EBOptimized
     {
-        word_t*   _ptr;
         bitsize_t _offset;
+        word_t*   _ptr;
 
-      public:
+        friend struct types::iterator;
         CPP14_CONSTEXPR reference(word_t* ptr, bitsize_t offset, Spec width = {}) noexcept
           : Spec(width)
-          , _ptr(ptr)
           , _offset(offset)
+          , _ptr(ptr)
         {
             Spec::check_offset(offset);
         }
-        using type = typename Spec::type;
+
+      public:
+        using type = value_type;
 
         CPP14_CONSTEXPR operator type() const noexcept { return Spec::load(_ptr, _offset); }
 
@@ -248,45 +238,79 @@ template<typename Spec = dynamic_packed_int_spec> struct packedint_types
             ref_y.store(ref_y._ptr, ref_y._offset, x);
         }
     };
+
+    struct iterator : iterator_base<iterator, reference>
+    {
+        using iterator_base<iterator, reference>::iterator_base;
+
+        /// Pointer to word_t (char-aligned) from which the value is extracted
+        constexpr word_t* wordptr() const noexcept { return reinterpret_cast<word_t*>(this->addr >> 3); }
+
+        constexpr reference operator*() const noexcept
+        {
+            assume(this->addr != 0, "nullptr dereferenced");
+            return {wordptr(), this->bitoffset(), *this};
+        }
+    };
+
+    struct const_iterator : iterator_base<const_iterator, value_type>
+    {
+        using iterator_base<const_iterator, value_type>::iterator_base;
+
+        /// Conversion from non-const iterator
+        constexpr const_iterator(const iterator& it) noexcept
+          : iterator_base<const_iterator, value_type>(it.bitptr(), it.packedint_spec())
+        {}
+
+        /// Pointer to word_t (char-aligned) from which the value is extracted
+        constexpr const word_t* wordptr() const noexcept { return reinterpret_cast<const word_t*>(this->addr >> 3); }
+
+        constexpr value_type operator*() const noexcept
+        {
+            assume(this->addr != 0, "nullptr dereferenced");
+            return Spec::load(wordptr(), this->bitoffset());
+        }
+    };
 };
 
-}
+template<typename Spec = specification<>> using iterator        = typename types<Spec>::iterator;
+template<typename Spec = specification<>> using const_iterator  = typename types<Spec>::const_iterator;
+template<typename Spec = specification<>> using reference       = typename types<Spec>::reference;
+template<typename Spec = specification<>> using const_reference = typename Spec::type;
 
-template<typename Spec = details::dynamic_packed_int_spec>
-class int_vector
-  : public view_facade<int_vector<Spec>,
-                       typename details::packedint_types<Spec>::iterator,
-                       typename details::packedint_types<Spec>::const_iterator>
+template<typename Spec = dynamic_spec>
+class vector
+  : public view_facade<vector<Spec>, iterator<Spec>, const_iterator<Spec>>
   , protected Spec // bitwidth specification, EBOptimized
 {
   protected:
-    using word_t     = typename Spec::word_t;
-    using types_base = details::packedint_types<Spec>;
+    using word_t = typename Spec::word_t;
 
     std::unique_ptr<word_t[]> _data{};
     size_t                    _nwords = 0;
     size_t                    _size   = 0;
 
   public:
-    using value_type = typename Spec::type;
+    using spec_t     = Spec;
+    using value_type = typename spec_t::type;
     /// The type used to represent the integer bitwidth, can be implicitly converted from integer, or default
     /// constructed for static width
-    using typename Spec::width_t;
+    using typename spec_t::width_t;
 
-    constexpr int_vector() noexcept                   = default;
-    CPP14_CONSTEXPR int_vector(int_vector&&) noexcept = default;
-    CPP14_CONSTEXPR int_vector& operator=(int_vector&&) noexcept = default;
+    constexpr vector() noexcept               = default;
+    CPP14_CONSTEXPR vector(vector&&) noexcept = default;
+    CPP14_CONSTEXPR vector& operator=(vector&&) noexcept = default;
 
     /// Allocate a vector of size integers, no initialization if performed
-    CPP14_CONSTEXPR int_vector(size_t size, width_t width = {})
-      : Spec(width)
+    CPP14_CONSTEXPR vector(size_t size, width_t width = {})
+      : spec_t(width)
     {
         resize(size, false, false);
     }
 
     /// Initialize with a fill value
-    CPP14_CONSTEXPR int_vector(size_t size, width_t width, value_type fill_value)
-      : int_vector(size, width)
+    CPP14_CONSTEXPR vector(size_t size, width_t width, value_type fill_value)
+      : vector(size, width)
     {
         if (size_t(fill_value) == 0u) {
             std::fill(_data.get(), _data.get() + _nwords, 0);
@@ -295,7 +319,7 @@ class int_vector
         }
     }
 
-    CPP14_CONSTEXPR int_vector(const int_vector& from)
+    CPP14_CONSTEXPR vector(const vector& from)
       : Spec(from)
     {
         resize(from._size, false);
@@ -303,9 +327,9 @@ class int_vector
         std::copy(from_ptr, from_ptr + _nwords, _data.get());
     }
 
-    CPP14_CONSTEXPR int_vector& operator=(const int_vector& from)
+    CPP14_CONSTEXPR vector& operator=(const vector& from)
     {
-        static_cast<Spec*>(this)->operator=(from);
+        static_cast<spec_t*>(this)->operator=(from);
         resize(from._size, false);
         const auto* from_ptr = from._data.get();
         std::copy(from_ptr, from_ptr + _nwords, _data.get());
@@ -314,9 +338,9 @@ class int_vector
 
     /// Initialize a vector from a range
     /// The maximum value will set the integer bitwidth or be checked against the static bitwidth
-    template<typename R, typename = decltype(concepts::RangeOf<const typename Spec::type, R>)>
-    CPP14_CONSTEXPR int_vector(const R& r, typename R::value_type max_value)
-      : int_vector(r.size(), Spec::forvalue(max_value))
+    template<typename R, typename = decltype(concepts::RangeOf<const value_type, R>)>
+    CPP14_CONSTEXPR vector(const R& r, typename R::value_type max_value)
+      : vector(r.size(), spec_t::forvalue(max_value))
     {
         using std::begin;
         using std::end;
@@ -325,18 +349,18 @@ class int_vector
 
     /// Initialize a vector from a range, maximal value is obtained from std::max_element
     template<typename R>
-    CPP14_CONSTEXPR explicit int_vector(const R& r)
-      : int_vector(r, *std::max_element(r.begin(), r.end()))
+    CPP14_CONSTEXPR explicit vector(const R& r)
+      : vector(r, *std::max_element(r.begin(), r.end()))
     {}
 
     constexpr size_t size() const noexcept { return _size; }
     constexpr bool   empty() const noexcept { return _size == 0; }
-    using Spec::width;
+    using spec_t::width;
 
     CPP14_CONSTEXPR void resize(size_t size, bool keep_data = true, bool shrink = false)
     {
         _size           = size;
-        auto new_nwords = Spec::words_required(size);
+        auto new_nwords = spec_t::words_required(size);
         if ((new_nwords > _nwords) || (shrink && new_nwords < _nwords)) { // realloc
             auto   new_data = std::unique_ptr<word_t[]>(new word_t[new_nwords]);
             size_t copysize = new_nwords > _nwords ? _nwords : new_nwords;
@@ -350,22 +374,24 @@ class int_vector
 
     constexpr size_t size_in_bytes() const { return _nwords * sizeof(word_t); }
 
-    CPP14_CONSTEXPR typename types_base::const_iterator begin() const noexcept { return {_data.get(), *this}; }
-    CPP14_CONSTEXPR typename types_base::const_iterator end() const noexcept { return {_data.get(), *this, _size}; }
-    CPP14_CONSTEXPR typename types_base::iterator       begin() noexcept { return {_data.get(), *this}; }
-    CPP14_CONSTEXPR typename types_base::iterator       end() noexcept { return {_data.get(), *this, _size}; }
+    CPP14_CONSTEXPR const_iterator<spec_t> begin() const noexcept { return {_data.get(), *this}; }
+    CPP14_CONSTEXPR const_iterator<spec_t> end() const noexcept { return {_data.get(), *this, _size}; }
+    CPP14_CONSTEXPR iterator<spec_t> begin() noexcept { return {_data.get(), *this}; }
+    CPP14_CONSTEXPR iterator<spec_t> end() noexcept { return {_data.get(), *this, _size}; }
 
 #ifdef GATBL_RANGE_IO_HPP
-    template<typename O> friend O& write(O& out, const int_vector& v)
+    template<typename O> friend O& write(O& out, const vector& v)
     {
+        using gatbl::write;
         size_t header = v.Spec::pack_size_and_width(v._size);
         write(out, header);
         write(out, span<const word_t>(v._data.get(), v.words_required(v._size)));
         return out;
     }
 
-    template<typename I> friend I& read(I& in, int_vector& v)
+    template<typename I> friend I& read(I& in, vector& v)
     {
+        using gatbl::read;
         size_t header;
         read(in, header);
         v.resize(v.Spec::unpack_size_and_width(header), false, false);
@@ -375,8 +401,12 @@ class int_vector
 #endif
 };
 
-using twobit_dna_vector = int_vector<details::packed_twobit_spec>;
-using bit_vector        = int_vector<details::bit_spec>;
+} // namespace packedint
+
+template<typename S = packedint::specification<>> using int_vector = packedint::vector<S>;
+
+using twobit_dna_vector = int_vector<packedint::twobit_spec>;
+using bit_vector        = int_vector<packedint::bit_spec>;
 
 } // namespace gatbl;
 
