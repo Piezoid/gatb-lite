@@ -46,6 +46,8 @@ CopyableUnsignedRanges(const Rin& in, Rout&& out) -> decltype(value_require(std:
 
 namespace bits {
 
+using bitsize_t = uint8_t;
+
 namespace details {
 template<size_t bits> struct uint;
 
@@ -105,7 +107,7 @@ union splited_int128_t
 };
 
 inline CPP14_CONSTEXPR __uint128_t
-                       bswap(__uint128_t v)
+bswap(__uint128_t v)
 { // FIXME:: use suffle
     splited_int128_t s{v};
     uint64_t         tmp = bswap(s.splited[0]);
@@ -160,12 +162,12 @@ bitwidth() -> decltype(bitwidth<value_t<R>>() * size(R{}))
 }
 
 template<typename T>
-constexpr inline concepts::if_unsigned_t<T, std::pair<size_t, size_t>>
+CPP14_CONSTEXPR inline concepts::if_unsigned_t<T, std::pair<size_t, bitsize_t>>
 split_bitoffset(size_t n)
 {
     constexpr size_t word_bits  = bitwidth<T>();
     size_t           word_shift = n / word_bits;
-    size_t           bit_shift  = n - (word_shift * word_bits);
+    bitsize_t        bit_shift  = n - (word_shift * word_bits);
     return {word_shift, bit_shift};
 }
 
@@ -200,19 +202,19 @@ parity(const R& r) -> decltype(concepts::type_require<bool>(concepts::UnsignedRa
 }
 
 inline CPP14_CONSTEXPR size_t
-                       clz(unsigned int x)
+clz(unsigned int x)
 {
     return uint8_t(__builtin_clz(x));
 }
 
 inline CPP14_CONSTEXPR size_t
-                       clz(unsigned long x)
+clz(unsigned long x)
 {
     return uint8_t(__builtin_clzl(x));
 }
 
 inline CPP14_CONSTEXPR size_t
-                       clz(unsigned long long x)
+clz(unsigned long long x)
 {
     return uint8_t(__builtin_clzll(x));
 }
@@ -432,8 +434,8 @@ lshift_restricted(const Rin& in, Rout& out, size_t n) -> decltype(concepts::Copy
 }
 
 template<typename T>
-inline constexpr concepts::if_unsigned_t<T>
-rotl(T x, size_t n)
+inline CPP14_CONSTEXPR concepts::if_unsigned_t<T>
+                       rotl(T x, size_t n)
 {
     constexpr size_t bits = bitwidth<T>();
     assume(n < bits, "shift=%lu >= bitwidth=%lu", n, bits);
@@ -441,8 +443,8 @@ rotl(T x, size_t n)
 }
 
 template<typename T>
-inline constexpr concepts::if_unsigned_t<T>
-rotr(T x, size_t n)
+inline CPP14_CONSTEXPR concepts::if_unsigned_t<T>
+                       rotr(T x, size_t n)
 {
     constexpr size_t bits = bitwidth<T>();
     assume(n < bits, "shift=%lu >= bitwidth=%lu", n, bits);
@@ -514,16 +516,16 @@ peek_bitgroup(const Range& r, size_t n = 1, size_t pos = 0) noexcept -> decltype
 /// Set bits pos...pos+n-1 in `target` with bits 0..n-1 from `from`
 /// If all bits are 0 in the target region, a bitwise OR would be faster, even more so if `from` is already masked.
 template<typename T>
-inline constexpr concepts::if_unsigned_t<T>&
-poke_bitgroup(T& target, T from, size_t n = 1, size_t pos = 0)
+inline CPP14_CONSTEXPR concepts::if_unsigned_t<T>&
+                       poke_bitgroup(T& target, T from, size_t n = 1, size_t pos = 0)
 {
-    T mask = bitmask<T>(n, pos);
+    auto mask = bitmask<T>(n, pos);
     target ^= (target ^ (from << pos)) & mask;
     return target;
 }
 
 template<typename Range>
-inline constexpr auto
+inline CPP14_CONSTEXPR auto
 poke_bitgroup(Range& r, value_t<Range> v, size_t n = 1, size_t pos = 0) -> decltype(concepts::UnsignedRange(r))
 {
     using range_element_t      = value_t<Range>;

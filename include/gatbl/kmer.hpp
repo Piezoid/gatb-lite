@@ -19,10 +19,9 @@
 
 namespace gatbl {
 
-using bitsize_t   = uint_fast8_t; // Bits indices
-using ksize_t     = bitsize_t;    // Nucleotide incides inside kmers
-using kmer_t      = uint64_t;     // k-mers, uint64_t for k<32, uint64_t for k<64
-using minimizer_t = uint32_t;     // Minimizers
+using ksize_t     = bits::bitsize_t; // Nucleotide incides inside kmers
+using kmer_t      = uint64_t;        // k-mers, uint64_t for k<32, uint64_t for k<64
+using minimizer_t = uint32_t;        // Minimizers
 
 using nucint_t = uint_fast8_t;
 enum class nuc_t : nucint_t { A = 0, C, T, G, N = 255 };
@@ -82,16 +81,17 @@ reversed(R&& r) -> decltype(concepts::type_require<reverse_range<R>>(concepts::R
 // Represents the cardinality of a pow2 sized set. Allows div/mod arithmetic operations on indexes.
 template<typename T> struct Pow2
 {
-    Pow2(uint_fast8_t bits)
+    using bitsize_t = bits::bitsize_t;
+    Pow2(bitsize_t bits)
       : _bits(bits)
     {
         assume(bits < CHAR_BIT * sizeof(T), "Pow2(%u > %u)", unsigned(bits), unsigned(CHAR_BIT * sizeof(T)));
     }
 
-    uint_fast8_t bits() const { return _bits; }
-    T            value() const { return T(1) << _bits; }
-    explicit     operator T() const { return value(); }
-    T            max() const { return value() - T(1); }
+    bitsize_t bits() const { return _bits; }
+    T         value() const { return T(1) << _bits; }
+    explicit  operator T() const { return value(); }
+    T         max() const { return value() - T(1); }
 
     friend T  operator*(const T& x, const Pow2& y) { return x << y._bits; }
     friend T& operator*=(T& x, const Pow2& y) { return x <<= y._bits; }
@@ -99,12 +99,12 @@ template<typename T> struct Pow2
     friend T& operator/=(T& x, const Pow2& y) { return x >>= y._bits; }
     friend T  operator%(const T& x, const Pow2& y) { return x & y.max(); }
     friend T& operator%=(T& x, const Pow2& y) { return x &= y.max(); }
-    Pow2&     operator>>=(uint_fast8_t d)
+    Pow2&     operator>>=(bitsize_t d)
     {
         _bits -= d;
         return *this;
     }
-    Pow2& operator<<=(uint_fast8_t d)
+    Pow2& operator<<=(bitsize_t d)
     {
         _bits += d;
         return *this;
@@ -909,10 +909,10 @@ template<typename kmer_t = kmer_t, typename Canonical = LexicoCanonical> struct 
     sized_kmer_t operator*() { return canon(); }
 
   private:
-    const kmer_t  _mask;
-    kmer_t        _forward = {}, _reverse = {};
-    const ksize_t _k;
-    bitsize_t     _left_bitpos;
+    const kmer_t    _mask;
+    kmer_t          _forward = {}, _reverse = {};
+    const ksize_t   _k;
+    bits::bitsize_t _left_bitpos;
 };
 
 template<typename Base, typename Functor>
@@ -1296,7 +1296,7 @@ template<typename elem_t, size_t log2size = 5, typename idx_t = ksize_t> struct 
     idx_t                     _e = 0;
 };
 
-template<typename elem_t = minimizer_t, bitsize_t log2maxsize = 5, typename idx_t = size_t> struct minimum_window
+template<typename elem_t = minimizer_t, bits::bitsize_t log2maxsize = 5, typename idx_t = size_t> struct minimum_window
 {
     minimum_window(ksize_t w)
       : _w(w)
@@ -1376,7 +1376,7 @@ template<typename elem_t = minimizer_t, bitsize_t log2maxsize = 5, typename idx_
     const idx_t                                       _w;
 };
 
-template<typename elem_t = minimizer_t, bitsize_t log2maxsize = 5> struct minimum_window2
+template<typename elem_t = minimizer_t, bits::bitsize_t log2maxsize = 5> struct minimum_window2
 {
     minimum_window2(ksize_t w)
       : _w(w)
