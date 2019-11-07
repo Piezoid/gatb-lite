@@ -128,7 +128,7 @@ struct invalid_dna_exception : public std::domain_error
 };
 
 inline nuc_t hot_fun
-             nuc2int(char c) // FIXME: rename
+nuc2int(char c) // FIXME: rename
 {
     //    if((c == 'a' || c == 'c' || c == 't' || c == 'g'
     //           || c == 'A' || c == 'C' || c == 'T' || c == 'G')) {
@@ -142,7 +142,7 @@ inline nuc_t hot_fun
 }
 
 inline std::string pure_fun hot_fun
-                            kmer2str(kmer_t num, ksize_t k)
+kmer2str(kmer_t num, ksize_t k)
 {
     std::string  res(k, 0);
     Pow2<kmer_t> anc(2 * (k - 1));
@@ -158,7 +158,7 @@ inline std::string pure_fun hot_fun
 }
 
 inline kmer_t pure_fun hot_fun
-                       str2num(const std::string& str)
+str2num(const std::string& str)
 {
     kmer_t res(0);
     for (uint i = 0; i < str.size(); i++) {
@@ -209,7 +209,7 @@ struct ReversibleHashOp
 // It's quite complex to bitshift mmx register without an immediate (constant) count
 // See: https://stackoverflow.com/questions/34478328/the-best-way-to-shift-a-m128i
 inline __m128i pure_fun hot_fun
-                        mm_bitshift_left(__m128i x, unsigned count)
+mm_bitshift_left(__m128i x, unsigned count)
 {
     assume(count < 128, "count=%u >= 128", count);
     __m128i carry = _mm_slli_si128(x, 8);
@@ -223,7 +223,7 @@ inline __m128i pure_fun hot_fun
 }
 
 inline __m128i pure_fun hot_fun
-                        mm_bitshift_right(__m128i x, unsigned count)
+mm_bitshift_right(__m128i x, unsigned count)
 {
     assume(count < 128, "count=%u >= 128", count);
     __m128i carry = _mm_srli_si128(x, 8);
@@ -236,7 +236,7 @@ inline __m128i pure_fun hot_fun
 }
 
 inline __uint128_t pure_fun hot_fun
-                            rcb(const __uint128_t& in, uint n)
+rcb(const __uint128_t& in, uint n)
 {
     assume(n <= 64, "n=%u > 64", n);
     union kmer_u
@@ -268,7 +268,7 @@ inline __uint128_t pure_fun hot_fun
 }
 
 inline uint64_t pure_fun hot_fun
-                         rcb(uint64_t in, uint n)
+rcb(uint64_t in, uint n)
 {
     assume(n <= 32, "n=%u > 32", n);
     // Complement, swap byte order
@@ -285,7 +285,7 @@ inline uint64_t pure_fun hot_fun
 }
 
 inline uint32_t pure_fun hot_fun
-                         rcb(uint32_t in, uint n)
+rcb(uint32_t in, uint n)
 {
     assume(n <= 16, "n=%u > 16", n);
     // Complement, swap byte order
@@ -323,17 +323,84 @@ template<typename T> struct no_conversion_kmer : public no_conversion<T>
     {}
 };
 
-template<typename kmer_t = kmer_t, typename ksize_t = ksize_t> struct packed_layout sized_kmer
+template<typename kmer_t = kmer_t, typename ksize_t = ksize_t> struct packed_layout sized_kmer;
+
+template<typename KmerT = size_t, typename KSizeT = ksize_t> struct packed_layout kmer_model
+{
+    using kmer_t  = KmerT;
+    using ksize_t = KSizeT;
+
+    kmer_model() = default;
+    kmer_model(int k)
+      : _k(ksize_t(k))
+    {
+        assume(k >= 0 && k <= std::numeric_limits<ksize_t>::max(), "k out of range");
+    }
+                           operator ksize_t() const { return _k; }
+    constexpr ksize_t      size() const { return _k; }
+    constexpr ksize_t      bitwidth() const { return 2 * _k; }
+    CPP14_CONSTEXPR kmer_t cardinality() const
+    {
+        assume(bitwidth() < bits::bitwidth<kmer_t>(), "cadinality is not representable in kmer type");
+        return kmer_t(1) << bitwidth();
+    }
+    CPP14_CONSTEXPR kmer_t mask() const { return bits::bitmask<kmer_t>(bitwidth()); }
+    CPP14_CONSTEXPR kmer_t mask(no_conversion_kmer<kmer_t> kmer) const { return kmer & mask(); }
+    // void assume_masked(no_conversion_kmer<kmer_t> kmer) const { assume(kmer <= mask(), "kmer is not masked"); }
+    void assert_masked(no_conversion_kmer<kmer_t> kmer) const { assert(kmer <= mask(), "kmer is not masked"); }
+    sized_kmer<kmer_t, ksize_t> make_sized(no_conversion_kmer<kmer_t> kmer) const
+    {
+        assert_masked(kmer);
+        return {kmer, *this};
+    }
+
+  private:
+    ksize_t _k;
+};
+
+/// Same as kmer_model but cache the mask
+template<typename KmerT = size_t, typename KSizeT = ksize_t>
+struct packed_layout kmer_mask : public kmer_model<KmerT, KSizeT>
+{
+    using base    = kmer_model<KmerT, KSizeT>;
+    using kmer_t  = KmerT;
+    using ksize_t = KSizeT;
+
+    kmer_mask(kmer_model<kmer_t, ksize_t> k)
+      : base(k)
+      , _mask(base::mask())
+    {}
+
+    CPP14_CONSTEXPR kmer_t cardinality() const
+    {
+        assume(this->bitwidth() < bits::bitwidth<kmer_t>(), "cadinality is not representable in kmer type");
+        return kmer_t(1) << this->bitwidth();
+    }
+    CPP14_CONSTEXPR kmer_t mask() const { return _mask; }
+    CPP14_CONSTEXPR kmer_t mask(no_conversion_kmer<kmer_t> kmer) const { return kmer & mask(); }
+    // void assume_masked(no_conversion_kmer<kmer_t> kmer) const { assume(kmer <= mask(), "kmer is not masked"); }
+    void assert_masked(no_conversion_kmer<kmer_t> kmer) const { assert(kmer <= mask(), "kmer is not masked"); }
+    sized_kmer<kmer_t, ksize_t> make_sized(no_conversion_kmer<kmer_t> kmer) const
+    {
+        assert_masked(kmer);
+        return {kmer, *this};
+    }
+
+  private:
+    kmer_t _mask;
+};
+
+template<typename kmer_t, typename ksize_t> struct packed_layout sized_kmer
 {
     operator kmer_t() const { return kmer; }
 
-    kmer_t  kmer;
-    ksize_t size;
+    kmer_t                      kmer;
+    kmer_model<kmer_t, ksize_t> size;
 };
 
-template<typename T>
+template<typename T, typename ksize_t = ksize_t>
 constexpr inline auto
-get_kmer(sized_kmer<T> sz_kmer) -> decltype(get_kmer(sz_kmer.kmer))
+get_kmer(sized_kmer<T, ksize_t> sz_kmer) -> decltype(get_kmer(sz_kmer.kmer))
 {
     return get_kmer(sz_kmer.kmer);
 }
@@ -364,10 +431,7 @@ template<typename KmerT, typename From = KmerT, bool masking = true> struct sub_
 
     size_t image_size() const { return size_t(mask_ >> shift_) + 1; }
 
-    sized_kmer_t operator()(no_conversion_kmer<From> kmer) const
-    {
-        return sized_kmer_t{kmer_t(mask(kmer) >> shift_), k_};
-    }
+    sized_kmer_t operator()(no_conversion_kmer<From> kmer) const { k_.make_sized(kmer); }
 
     ssize_t compare(no_conversion_kmer<From> a, no_conversion_kmer<From> b) const { return ssize_t(mask(a)) - mask(b); }
 
@@ -382,8 +446,9 @@ template<typename KmerT, typename From = KmerT, bool masking = true> struct sub_
         }
     }
 
-    From    mask_;
-    ksize_t shift_, k_;
+    From               mask_;
+    ksize_t            shift_;
+    kmer_model<kmer_t> k_;
 };
 
 template<typename KmerT, typename From, bool masking = true> struct suffix_kextractor
@@ -400,7 +465,7 @@ template<typename KmerT, typename From, bool masking = true> struct suffix_kextr
 
     ksize_t size() const { return k_; }
 
-    ksize_t bits() const { return 2 * k_; }
+    ksize_t bits() const { return k_.bits(); }
 
     size_t image_size() const { return size_t(mask_) + 1; }
 
@@ -422,14 +487,13 @@ template<typename KmerT, typename From, bool masking = true> struct suffix_kextr
         }
     }
 
-    kmer_t  mask_;
-    ksize_t k_;
+    kmer_t             mask_;
+    kmer_model<kmer_t> k_;
 };
 
 template<typename KmerT, typename From, bool masking = false> struct prefix_kextractor
 {
-    using kmer_t       = KmerT;
-    using sized_kmer_t = sized_kmer<kmer_t>;
+    using kmer_t = KmerT;
 
     prefix_kextractor(ksize_t k, ksize_t offset)
       : mask_(bits::bitmask<kmer_t>(2 * k))
@@ -441,11 +505,11 @@ template<typename KmerT, typename From, bool masking = false> struct prefix_kext
 
     ksize_t size() const { return k_; }
 
-    ksize_t bits() const { return 2 * k_; }
+    ksize_t bits() const { return k_.bits(); }
 
     size_t image_size() const { return mask_ + 1; }
 
-    sized_kmer_t operator()(no_conversion_kmer<From> kmer) const { return sized_kmer_t{mask(kmer >> shift_), k_}; }
+    sized_kmer<kmer_t> operator()(no_conversion_kmer<From> kmer) const { return k_.make_sized(mask(kmer >> shift_)); }
 
     ssize_t compare(no_conversion_kmer<From> a, no_conversion_kmer<From> b) const
     {
@@ -456,16 +520,19 @@ template<typename KmerT, typename From, bool masking = false> struct prefix_kext
   protected:
     kmer_t mask(From x) const
     {
+        auto y = kmer_t(x);
         if (masking) {
-            return x & mask_;
+            return y & mask_;
         } else {
+            k_.assert_masked(y);
             assert(x <= this->mask_, "kmer larger than max value");
             return x;
         }
     }
 
-    KmerT   mask_;
-    ksize_t shift_, k_;
+    KmerT              mask_;
+    ksize_t            shift_;
+    kmer_model<kmer_t> k_;
 };
 
 namespace details {
@@ -672,10 +739,10 @@ template<typename R, typename _iterator_wrapper> struct wrapped_range
     using range_t = remove_reference_t<R>;
 
   public:
-    using iterator     = _iterator_wrapper;
-    using element_type = typename iterator::value_type;
-    using reference    = typename iterator::reference;
-    using size_type    = size_t;
+    using iterator   = _iterator_wrapper;
+    using value_type = typename iterator::value_type;
+    using reference  = typename iterator::reference;
+    using size_type  = size_t;
 
     iterator begin() const { return _iterator_wrapper(gatbl::begin(repr)); }
     iterator end() const { return _iterator_wrapper(gatbl::end(repr)); }
@@ -965,7 +1032,7 @@ template<typename kmer_t = kmer_t> class entropy_filter
     }
 
   public:
-    cold_fun entropy_filter(ksize_t k, double threshold = 3)
+    cold_fun entropy_filter(ksize_t k, double threshold)
       : _threshold(threshold * precision)
       , _n(k - 1) // Number of 2-mers
     {
@@ -977,6 +1044,15 @@ template<typename kmer_t = kmer_t> class entropy_filter
             double p      = i / double(_n);
             _xlogx_lkt[i] = lktnum_t(-log2(p) * p * precision);
         }
+    }
+
+    entropy_filter(entropy_filter&&) noexcept = default;
+    entropy_filter(const entropy_filter& from)
+      : _threshold(from._threshold)
+      , _n(from._n)
+    {
+        _xlogx_lkt = make_unique<lktnum_t[]>(_n + 1);
+        std::copy(from._xlogx_lkt.get(), from._xlogx_lkt.get() + _n + 1, _xlogx_lkt.get());
     }
 
     double entropy(kmer_t kmer) const { return double(_entropy(kmer)) / precision; }
@@ -1046,7 +1122,7 @@ iter_kmers(R str, ksize_t k)
 template<typename elem_t, size_t log2size = 5, typename idx_t = ksize_t> struct stack_ringbuf
 {
     static constexpr size_t capacity = 1ull << log2size;
-    using element_type               = elem_t;
+    using value_type                 = elem_t;
     static_assert(capacity <= std::numeric_limits<idx_t>::max(), "idx_t too short");
 
   private:
@@ -1059,12 +1135,12 @@ template<typename elem_t, size_t log2size = 5, typename idx_t = ksize_t> struct 
 
     template<typename ref_t = const stack_ringbuf&> struct accessor_tmpl : protected state
     {
-        const element_type& front() const
+        const value_type& front() const
         {
             check_not_empty();
             return at(state::_b);
         }
-        const element_type& back() const
+        const value_type& back() const
         {
             check_not_empty();
             return at(state::_e - 1);
@@ -1088,7 +1164,7 @@ template<typename elem_t, size_t log2size = 5, typename idx_t = ksize_t> struct 
         void check_not_full() const { assume(!full(), "Ring full"); }
         void check_not_empty() const { assume(!empty(), "Ring empty"); }
 
-        const element_type& at(idx_t idx) const
+        const value_type& at(idx_t idx) const
         {
             idx &= mask;
             assume(idx < capacity, "WTF");
@@ -1108,32 +1184,32 @@ template<typename elem_t, size_t log2size = 5, typename idx_t = ksize_t> struct 
             state::_e = state::_b = 0;
         }
 
-        element_type& push_front(element_type val)
+        value_type& push_front(value_type val)
         {
             this->check_not_full();
             return this->at(--state::_b) = val;
         }
-        element_type& push_back(element_type val)
+        value_type& push_back(value_type val)
         {
             this->check_not_full();
             return this->at(state::_e++) = val;
         }
-        element_type& front()
+        value_type& front()
         {
             this->check_not_empty();
             return this->at(state::_b);
         }
-        element_type& back()
+        value_type& back()
         {
             this->check_not_empty();
             return this->at(state::_e - 1);
         }
-        element_type pop_front()
+        value_type pop_front()
         {
             this->check_not_empty();
             return std::move(this->at(state::_b++));
         }
-        element_type pop_back()
+        value_type pop_back()
         {
             this->check_not_empty();
             return std::move(this->at(--state::_e));
@@ -1141,7 +1217,7 @@ template<typename elem_t, size_t log2size = 5, typename idx_t = ksize_t> struct 
 
       protected:
         using accessor_tmpl<stack_ringbuf&>::accessor_tmpl;
-        element_type& at(idx_t idx)
+        value_type& at(idx_t idx)
         {
             idx &= mask;
             assume(idx < capacity, "WTF");
