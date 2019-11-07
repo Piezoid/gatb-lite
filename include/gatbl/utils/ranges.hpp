@@ -92,7 +92,7 @@ struct iterator_traits : public std::iterator_traits<Iterator>
     static constexpr bool is_bidirectional = false;
     static constexpr bool is_random_access = false;
 
-    static bool      bound_check(IR it, IR first, SR last) { return it != last; }
+    static bool      bound_check(IR it, IR, SR last) { return it != last; }
     static reference deref_check(IR it, IR first, SR last)
     {
         assume(traits::bound_check(it, first, last), "Out of bound");
