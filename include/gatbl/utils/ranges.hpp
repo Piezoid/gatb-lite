@@ -2,6 +2,7 @@
 #define GATBL_RANGES_HPP
 
 #include <cstring>
+#include "gatbl/common.hpp"
 #include "gatbl/utils/concepts.hpp"
 #include "gatbl/utils/compatibility.hpp"
 
@@ -16,28 +17,23 @@ at(Range& r, size_t pos) -> decltype(concepts::value_require(*(begin(r) + pos), 
     return *(begin(r) + pos);
 }
 
-// Those are not customization points but we will overload them with range-like arguments
-using std::equal;
-using std::find;
-using std::lexicographical_compare;
-
 namespace concepts {
 
 template<typename R>
 auto
-Range(R&& r) -> decltype(type_require<R>(begin(r) != end(r)));
+Range(R&& r) -> decltype(type_require<R>(begin(r) != end(r), ++begin(r)));
 
 template<typename R>
 auto
-FiniteRange(R&& r) -> decltype(type_require<R>(begin(r) != end(r), size(r)));
+FiniteRange(R&& r) -> decltype(type_require<R>(size(r), begin(r) != end(r), ++begin(r)));
 
 template<typename T, typename R>
 auto
-RangeOf(R&& r) -> decltype(type_require<R>(begin(r) != end(r), value_require<T&>(*begin(r))));
+RangeOf(R&& r) -> decltype(value_require<T&>(*++begin(r), begin(r) != end(r)));
 
 template<typename T, typename R>
 auto
-FiniteRangeOf(R&& r) -> decltype(type_require<T>(begin(r) != end(r), size(r), static_cast<T&>(*begin(r))));
+FiniteRangeOf(R&& r) -> decltype(value_require<T&>(*++begin(r), begin(r) != end(r), size(r)));
 
 template<typename... T>
 auto
@@ -69,265 +65,343 @@ template<typename Range> using reference_t        = decltype(*begin(std::declval
 template<typename Range> using const_reference_t  = decltype(*begin(std::declval<const Range&>()));
 template<typename Range> using value_t            = remove_reference_t<reference_t<Range>>;
 
-template<typename Iterator,
-         typename Sentinel = Iterator,
-         typename Category = typename std::iterator_traits<Iterator>::iterator_category>
-struct iterator_traits : public std::iterator_traits<Iterator>
+template<typename L, typename R>
+constexpr static auto
+compare(const L& lhs, const R& rhs) noexcept -> decltype(lhs - rhs)
 {
-  protected:
-    using base   = std::iterator_traits<Iterator>;
-    using traits = iterator_traits<Iterator, Sentinel>; // get the most specialized version
-    using IR     = Iterator const&;
-    using SR     = Sentinel const&;
+    return lhs - rhs;
+}
 
-  public:
-    using iterator = Iterator;
-    using sentinel = Sentinel;
-    using typename base::difference_type;
-    using typename base::reference;
-    using typename base::value_type;
-    using size_type = make_unsigned_t<difference_type>;
-
-    static constexpr bool is_output        = !std::is_const<value_type>::value;
-    static constexpr bool is_bidirectional = false;
-    static constexpr bool is_random_access = false;
-
-    static bool      bound_check(IR it, IR, SR last) { return it != last; }
-    static reference deref_check(IR it, IR first, SR last)
-    {
-        assume(traits::bound_check(it, first, last), "Out of bound");
-        return *it;
-    }
-    static reference front(IR first, SR last) { return traits::deref_check(first, first, last); }
-};
-
-template<typename I, typename S>
-struct iterator_traits<I, S, std::bidirectional_iterator_tag> : public iterator_traits<I, S, std::forward_iterator_tag>
+/// Comparable CRTP base, user must define either `signed operator-(L, R)` or `signed compare(L, R)`.
+/// Otherwise all of the following must be defined:
+/// - operator<(L, R)
+/// - operator<(R, L)
+/// - operator==(R, L)
+template<typename L, typename R = L> struct comparable_facade
 {
-  protected:
-    using base = iterator_traits<I, S, std::forward_iterator_tag>;
-    using typename base::IR;
-    using typename base::SR;
-    using typename base::traits;
-
-  public:
-    using typename base::reference;
-    static constexpr bool is_bidirectional = true;
-
-    static reference back(IR first, SR last)
-    {
-        auto it = last;
-        return traits::deref_check(--it, first, last);
-    }
-};
-
-template<typename I, typename S>
-struct iterator_traits<I, S, std::random_access_iterator_tag>
-  : public iterator_traits<I, S, std::bidirectional_iterator_tag>
-{
-  protected:
-    using base = iterator_traits<I, S, std::bidirectional_iterator_tag>;
-    using typename base::IR;
-    using typename base::SR;
-    using typename base::traits;
-
-  public:
-    using typename base::difference_type;
-    using typename base::reference;
-    using typename base::size_type;
-    static constexpr bool is_random_access = true;
-
-    static bool bound_check(IR it, IR first, SR last)
-    {
-        assume(first <= last, "iterator ends swapped");
-        return first <= it && it < last;
-    }
-    static size_type size(IR first, SR last)
-    {
-        difference_type delta = last - first;
-        assume(delta >= 0, "iterator ends swapped");
-        return static_cast<size_type>(delta);
-    }
-    static reference at(size_type idx, IR first, SR last) { return traits::deref_check(first + idx, first, last); }
-};
-
-// using plopi = decltype(iterator_traits<int*, int*>::at);
-
-template<typename Derived> struct iterator_facade
-{
-  protected:
-    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>> D& derived()
-    {
-        return *static_cast<Derived*>(this);
-    }
-    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>> const D& derived() const
-    {
-        return *static_cast<const Derived*>(this);
-    }
-
   private:
-    template<typename D> auto operator*() -> decltype(derived<D>().dereference())
-    {
-        return this->derived().dereference();
-    }
+    const L& derived() const noexcept { return static_cast<const L&>(*this); }
 
-    template<typename D> auto operator++() -> decltype(concepts::type_require<Derived&>(derived<D>().increment()))
-    {
-        this->derived().increment();
-        return this->derived();
-    }
+  public:
+    bool operator==(const R& other) const { return compare(derived(), other) == 0; }
+    bool operator<(const R& other) const { return compare(derived(), other) < 0; }
+    bool operator>(const R& other) const { return compare(derived(), other) > 0; }
+    bool operator!=(const R& other) const { return !(derived() == other); }
+    bool operator>=(const R& other) const { return !(derived() < other); }
+    bool operator<=(const R& other) const { return !(derived() > other); }
+};
 
-    template<typename D> auto operator--() -> decltype(concepts::type_require<Derived&>(derived<D>().decrement()))
-    {
-        this->derived().decrement();
-        return this->derived();
-    }
+/// Iterator CRTP base, similar to std::iterator, but with convenience methods
+template<typename D,
+         typename Category,
+         typename ValueTy,
+         typename Reference = ValueTy&,
+         typename Pointer   = ValueTy*,
+         typename Distance  = ptrdiff_t,
+         typename Sentinel  = D>
+struct iterator_facade;
 
-    template<typename D>
-    auto operator++(int) -> decltype(concepts::type_require<Derived>(derived<D>().increment(), *this = *this))
+template<typename D, typename ValueTy, typename Reference, typename Pointer, typename Distance, typename Sentinel>
+struct iterator_facade<D, gatbl::contiguous_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>
+
+  : public iterator_facade<D, std::random_access_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>
+{
+    using iterator_category = gatbl::contiguous_iterator_tag;
+};
+
+template<typename D, typename ValueTy, typename Reference, typename Pointer, typename Distance, typename Sentinel>
+struct iterator_facade<D, std::random_access_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>
+  : iterator_facade<D, std::bidirectional_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>
+  , comparable_facade<D, Sentinel>
+{
+  protected:
+    using iterator_facade<D, std::bidirectional_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>::derived;
+
+  public:
+    using iterator_category = std::random_access_iterator_tag;
+    using comparable_facade<D, Sentinel>::operator==;
+    using comparable_facade<D, Sentinel>::operator!=;
+
+    CPP14_CONSTEXPR D& operator+=(Distance x) { return derived().operator-=(-x); }
+
+    CPP14_CONSTEXPR D& operator-=(Distance x) { return derived().operator+=(-x); }
+
+    CPP14_CONSTEXPR D operator+(Distance x) const
     {
-        Derived tmp(this->derived());
-        this->derived().increment();
+        D   tmp = derived();
+        tmp.operator+=(x);
         return tmp;
     }
 
-    template<typename D>
-    auto operator--(int) -> decltype(concepts::type_require<Derived>(derived<D>().decrement(), *this = *this))
+    friend constexpr D operator+(Distance x, D const& it) { return it + x; }
+
+    CPP14_CONSTEXPR D operator-(Distance x) const
     {
-        Derived tmp(this->derived());
-        this->derived().decrement();
+        D   tmp = derived();
+        tmp.operator-=(x);
         return tmp;
     }
 
-    template<typename D, typename d_t>
-    auto operator+=(d_t n) -> decltype(concepts::type_require<Derived>(derived<D>().advance(n)))
-    {
-        this->derived().advance(n);
-        return this->derived();
-    }
+    constexpr Reference operator[](Distance x) const { return *(derived() + x); }
+};
 
-    template<typename D, typename d_t>
-    auto operator-=(d_t n) -> decltype(concepts::type_require<Derived>(derived<D>().advance(-n)))
+template<typename D, typename ValueTy, typename Reference, typename Pointer, typename Distance, typename Sentinel>
+struct iterator_facade<D, std::bidirectional_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>
+  : iterator_facade<D, std::forward_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>
+{
+    using iterator_category = std::bidirectional_iterator_tag;
+
+    D& operator--() { return this->derived().operator-=(1); }
+
+    CPP14_CONSTEXPR D operator--(int)
     {
-        this->derived().advance(-n);
-        return this->derived();
+        auto& ref = static_cast<D&>(*this);
+        D     tmp = ref;
+        ref.  operator--();
+        return tmp;
     }
 };
 
-template<typename I, typename S, typename T>
-using enable_if_neq_comparable = decltype(concepts::type_require<T>(std::declval<I>() != std::declval<S>()));
+template<typename D, typename ValueTy, typename Reference, typename Pointer, typename Distance, typename Sentinel>
+struct iterator_facade<D, std::forward_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>
+  : iterator_facade<D, std::input_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>
+{
+  public:
+    using iterator_category = std::forward_iterator_tag;
+    using iterator_facade<D, std::input_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>::operator++;
 
-template<typename I, typename S>
-struct iterator_traits<I,
-                       S,
-                       enable_if_t<std::is_base_of<iterator_facade<I>, I>::value,
-                                   enable_if_neq_comparable<I, S, typename I::iterator_category>>>
-{};
+    CPP14_CONSTEXPR D operator++(int)
+    {
+        auto& ref = static_cast<D&>(*this);
+        D     tmp = ref;
+        ref.  operator++();
+        return tmp;
+    }
+};
+
+template<typename D, typename ValueTy, typename Reference, typename Pointer, typename Distance, typename Sentinel>
+struct iterator_facade<D, std::input_iterator_tag, ValueTy, Reference, Pointer, Distance, Sentinel>
+{
+  protected:
+    D&       derived() noexcept { return static_cast<D&>(*this); }
+    const D& derived() const noexcept { return static_cast<const D&>(*this); }
+
+  public:
+    using iterator_category = std::input_iterator_tag;
+    using difference_type   = Distance;
+    using pointer           = Pointer;
+    using reference         = Reference;
+    using value_type        = ValueTy;
+
+    constexpr bool operator!=(const D& other) const { return !(derived() == other); }
+
+    constexpr bool operator==(const D& other) const { return !(derived() != other); }
+
+    CPP14_CONSTEXPR D& operator++() { return derived().operator+=(1u); }
+};
 
 /// A non owning range CRTP base
-template<typename Derived, typename I, typename S = I> struct view_facade
+template<typename Derived,
+         typename I,
+         typename CI    = I,
+         typename S     = I,
+         typename CS    = CI,
+         typename ItCat = typename std::iterator_traits<I>::iterator_category>
+struct view_facade;
+
+template<typename Derived, typename I, typename CI, typename S, typename CS>
+struct view_facade<Derived, I, CI, S, CS, gatbl::contiguous_iterator_tag>
+  : view_facade<Derived, I, CI, S, CS, std::random_access_iterator_tag>
 {
-
   private:
-    using it_traits = iterator_traits<I, S>;
+    using base = view_facade<Derived, I, CI, S, CS, std::input_iterator_tag>;
 
-    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>>
-    auto derived() -> decltype(*static_cast<D*>(this))
+  public:
+    using typename base::size_type;
+    using typename base::value_type;
+    using pointer       = value_type*;
+    using const_pointer = const value_type*;
+
+    const pointer* data() const { return std::addressof(*this->derived().begin()); }
+    const_pointer  data() { return std::addressof(*this->derived().begin()); }
+};
+
+template<typename Derived, typename I, typename CI, typename S, typename CS>
+struct view_facade<Derived, I, CI, S, CS, std::random_access_iterator_tag>
+  : view_facade<Derived, I, CI, S, CS, std::bidirectional_iterator_tag>
+{
+  private:
+    using base = view_facade<Derived, I, CI, S, CS, std::bidirectional_iterator_tag>;
+
+  public:
+    using typename base::const_reference;
+    using typename base::reference;
+    using typename base::size_type;
+
+    size_type size() const { return size_type(this->derived().end() - this->derived().begin()); }
+
+    const_reference at(size_type i) const
     {
-        return *static_cast<Derived*>(this);
+        assume(i < this->derived().size(), "out of bound indice");
+        return *(this->derived().begin() + i);
     }
-    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>>
-    auto derived() const -> decltype(*static_cast<const D*>(this))
+
+    reference at(size_type i)
     {
-        return *static_cast<const Derived*>(this);
+        assume(i < this->derived().size(), "out of bound indice");
+        return *(this->derived().begin() + i);
     }
+};
+
+template<typename Derived, typename I, typename CI, typename S, typename CS>
+struct view_facade<Derived, I, CI, S, CS, std::bidirectional_iterator_tag>
+  : view_facade<Derived, I, CI, S, CS, std::forward_iterator_tag>
+{
+  private:
+    using base = view_facade<Derived, I, CI, S, CS, std::forward_iterator_tag>;
+
+  public:
+    using typename base::const_reference;
+    using typename base::reference;
+    using reverse_iterator       = std::reverse_iterator<I>;
+    using const_reverse_iterator = std::reverse_iterator<I>;
+
+    reverse_iterator       rbegin() { return std::reverse_iterator<S>{this->derived().end()}; }
+    reverse_iterator       rend() { return std::reverse_iterator<I>{this->derived().begin()}; }
+    const_reverse_iterator rbegin() const { return std::reverse_iterator<S>{this->derived().end()}; }
+    const_reverse_iterator rend() const { return std::reverse_iterator<I>{this->derived().begin()}; }
+    const_reverse_iterator crbegin() const noexcept { return this->derived().rbegin(); }
+    const_reverse_iterator crend() const noexcept { return this->derived().rend(); }
+
+    const_reference back() const
+    {
+        this->check_not_empty();
+        auto it = this->derived().end();
+        --it;
+        return *it;
+    }
+
+    reference back()
+    {
+        this->check_not_empty();
+        auto it = this->derived().end();
+        --it;
+        return *it;
+    }
+};
+
+template<typename Derived, typename I, typename CI, typename S, typename CS>
+struct view_facade<Derived, I, CI, S, CS, std::forward_iterator_tag>
+  : view_facade<Derived, I, CI, S, CS, std::input_iterator_tag>
+{
+  private:
+    using base = view_facade<Derived, I, CI, S, CS, std::input_iterator_tag>;
+
+  public:
+    using typename base::const_reference;
+    using typename base::reference;
+    using typename base::size_type;
+
+    I cbegin() const noexcept { return this->derived().begin(); }
+    S cend() const noexcept { return this->derived().end(); }
+
+    size_type size() const { return size_type(std::distance(this->derived().begin(), this->derivend().end())); }
+
+    const_reference at(size_type i) const
+    {
+        using std::advance;
+        auto it = this->derived().begin();
+        advance(it, i);
+        assert(it != this->derived().begin(), "out of bound indice");
+        return *it;
+    }
+
+    reference at(size_type i)
+    {
+        using std::advance;
+        auto it = this->derived().begin();
+        advance(it, i);
+        assert(it != this->derived().begin(), "out of bound indice");
+        return *it;
+    }
+
+    const_reference operator[](size_type i) const { return this->derived().at(i); }
+    reference       operator[](size_type i) { return this->derived().at(i); }
+
+    const_reference back() const
+    {
+        this->check_not_empty();
+        return this->derived().at(this->derived().size() - 1u);
+    }
+
+    reference back()
+    {
+        this->check_not_empty();
+        return this->derived().at(this->derived().size() - 1u);
+    }
+};
+
+template<typename Derived, typename I, typename CI, typename S, typename CS>
+struct view_facade<Derived, I, CI, S, CS, std::input_iterator_tag>
+{
+  protected:
+    using it_traits = std::iterator_traits<I>;
+
+    const Derived& derived() const noexcept { return static_cast<const Derived&>(*this); }
+    Derived&       derived() noexcept { return static_cast<Derived&>(*this); }
+
+    void check_not_empty() const { assert(not empty(), "empty range"); }
 
   public:
     using iterator        = I;
-    using const_iterator  = iterator;
+    using const_iterator  = CI;
     using sentinel        = S;
+    using const_sentinel  = CS;
     using reference       = typename it_traits::reference;
-    using const_reference = typename it_traits::reference;
-    using element_type    = typename it_traits::value_type;
+    using const_reference = typename std::iterator_traits<CI>::reference;
+    using value_type      = typename it_traits::value_type;
     using difference_type = typename it_traits::difference_type;
-    using size_type       = typename it_traits::size_type;
+    using size_type       = make_unsigned_t<difference_type>;
 
-    bool empty() const
-    {
-        const auto first = derived().begin();
-        return !bound_check(first, first, derived().end());
-    }
+    bool empty() const noexcept { return derived().begin() == derived().end(); }
 
-    template<typename D = Derived>
-    auto size() const noexcept -> decltype(it_traits::size(derived<D>().begin(), derived<D>().end()))
+    template<typename D = Derived> const_reference front() const noexcept
     {
-        return it_traits::size(derived().begin(), derived().end());
+        check_not_empty();
+        return derived().begin();
     }
 
-    iterator cbegin() const noexcept { return derived().begin(); }
-    sentinel cend() const noexcept { return derived().end(); }
-
-    template<typename D = Derived>
-    auto rbegin() const
-      -> enable_if_t<iterator_traits<S, I>::is_bidirectional, std::reverse_iterator<decltype(derived<D>().end())>>
+    template<typename D = Derived> reference front() noexcept
     {
-        return std::reverse_iterator<S>{derived().end()};
-    }
-    template<typename D = Derived>
-    auto rend() const
-      -> enable_if_t<iterator_traits<S, I>::is_bidirectional, std::reverse_iterator<decltype(derived<D>().begin())>>
-    {
-        return std::reverse_iterator<I>{derived().begin()};
+        check_not_empty();
+        return derived().begin();
     }
 
-    template<typename D = Derived> auto crbegin() const noexcept -> decltype(derived<D>().rbegin())
-    {
-        return derived().rbegin();
-    }
-    template<typename D = Derived> auto crend() const noexcept -> decltype(derived<D>().rend())
-    {
-        return derived().rend();
-    }
+    const_iterator cbegin() const noexcept { return derived().begin(); }
+    const_sentinel cend() const noexcept { return derived().end(); }
 
-    template<typename D = Derived>
-    auto front() const noexcept -> decltype(it_traits::front(derived<D>().begin(), derived<D>().end()))
-    {
-        return it_traits::front(derived().begin(), derived().end());
-    }
-    template<typename D = Derived>
-    auto back() const noexcept -> decltype(it_traits::back(derived<D>().begin(), derived<D>().end()))
-    {
-        return it_traits::front(derived().begin(), derived().end());
-    }
-
-    template<typename D = Derived>
-    auto operator[](size_type idx) const -> decltype(it_traits::at(idx, derived<D>().begin(), derived<D>().end()))
-    {
-        return it_traits::at(idx, derived().begin(), derived().end());
-    }
-
-    template<typename D = Derived, typename = enable_if_t<std::is_same<D, Derived>::value>>
-    friend std::ostream& operator<<(std::ostream& sout, const Derived& rng)
-    { // Courtesy of range-v3
-        sout << '[';
-        auto       it = rng.begin();
-        auto const e  = rng.end();
-        if (it != e) {
-            for (;;) {
-                sout << *it;
-                if (++it == e) break;
-                sout << ',';
-            }
-        }
-        sout << ']';
-        return sout;
-    }
+    //    friend auto operator<<(std::ostream& sout, const Derived& rng) -> decltype(sout <<
+    //    std::declval<value_type>()) { // Courtesy of range-v3
+    //        sout << '[';
+    //        auto       it = rng.derived().begin();
+    //        auto const e  = rng.derived().end();
+    //        if (it != e) {
+    //            for (;;) {
+    //                sout << *it;
+    //                if (++it == e) break;
+    //                sout << ',';
+    //            }
+    //        }
+    //        sout << ']';
+    //        return sout;
+    //    }
 };
 
-template<typename R, typename Traits>
+// String conversion
+template<typename R, typename CharT = char, typename Traits = std::char_traits<CharT>>
 auto
-operator<<(std::basic_ostream<char, Traits>& os, const R& s)
-  -> decltype(os.write(static_cast<const char*>(begin(s)), size(s)))
+operator<<(std::basic_ostream<CharT, Traits>& os, const R& s)
+  -> decltype(os.write(static_cast<const CharT*>(begin(s)), size(s)))
 {
     return os.write(begin(s), size(s));
 }
@@ -341,6 +415,8 @@ to_string(const R& r) -> decltype(std::basic_string<Char, Traits, Alloc>(begin(r
 {
     return std::basic_string<Char, Traits, Alloc>(begin(r), size(r));
 }
+
+using std::find;
 
 /// Find specialization for char like types
 template<typename T, typename = enable_if_t<sizeof(T) == 1>>
@@ -381,48 +457,6 @@ contains(const Range& r, const T& v) -> decltype(find(r, v) != end(r))
 {
     return find(r, v) != end(r);
 }
-
-template<typename X, typename Y, typename C, typename = decltype(concepts::Ranges<X, Y>)>
-inline constexpr bool
-equal(const X& x, const Y& y) noexcept
-{
-    return equal(begin(x), end(y), begin(y), end(y));
-}
-
-template<typename X, typename Y, typename = decltype(concepts::ZippableRanges<X, Y, std::less<X>>)>
-inline constexpr bool
-lexicographical_compare(const X& x, const Y& y)
-{
-    return lexicographical_compare(begin(x), end(x), begin(y), end(y));
-}
-
-template<typename X, typename Y, typename C, typename = decltype(concepts::ZippableRanges<X, Y, C>)>
-inline constexpr bool
-lexicographical_compare(const X& x, const Y& y, C&& comp)
-{
-    return lexicographical_compare(begin(x), end(x), begin(y), end(y), std::forward<C>(comp));
-}
-
-// template<typename X,typename Y, typename=decltype(concepts::ZippableRanges<X, Y, std::equal_to<>>)>
-// inline constexpr bool operator==(const X& x, const Y& y) noexcept { return equal(x, y); }
-
-// template<typename X,typename Y, typename=decltype(concepts::ZippableRanges<X, Y, std::equal_to<>>)>
-// inline constexpr bool operator!=(const X& x, const Y& y) noexcept { return !equal(x, y); }
-
-// template<typename X,typename Y, typename=decltype(concepts::ZippableRanges<X, Y, std::less<>>)>
-// inline constexpr bool operator<(const X& x, const Y& y) noexcept { return lexicographical_compare(x, y); }
-
-// template<typename X,typename Y, typename=decltype(concepts::ZippableRanges<X, Y, std::less_equal<>>)>
-// inline constexpr bool operator<=(const X& x, const Y& y) noexcept { return lexicographical_compare(x, y,
-// std::less_equal{}); }
-
-// template<typename X,typename Y, typename=decltype(concepts::ZippableRanges<X, Y, std::greater<>>)>
-// inline constexpr bool operator>(const X& x, const Y& y) noexcept { return lexicographical_compare(x, y,
-// std::greater{}); }
-
-// template<typename X,typename Y, typename=decltype(concepts::ZippableRanges<X, Y, std::greater_equal<>>)>
-// inline constexpr bool operator>=(const X& x, const Y& y) noexcept { return lexicographical_compare(x, y,
-// std::greater_equal{}); }
 
 }
 

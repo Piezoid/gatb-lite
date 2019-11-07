@@ -6,29 +6,24 @@
 #include <iosfwd>
 #include "gatbl/common.hpp"
 #include "gatbl/utils/ranges.hpp"
-#include "gatbl/utils/empty_base.hpp"
 
 namespace gatbl {
 
 /// A Range made of an iterator and a sentinel, used as non owning proxy for a sequence of items
-template<typename I, typename S = I> struct iterator_pair : public view_facade<iterator_pair<I, S>, I, S>
+template<typename I, typename S = I> struct iterator_pair : public view_facade<iterator_pair<I, S>, I, I, S, S>
 {
   private:
-    using it_traits = iterator_traits<I, S>;
+    using base = view_facade<iterator_pair<I, S>, I, I, S, S>;
 
   public:
-    using iterator        = I;
-    using sentinel        = S;
-    using reference       = decltype(*std::declval<iterator>());
-    using element_type    = remove_reference_t<reference>;
-    using difference_type = typename it_traits::difference_type;
-    using size_type       = typename it_traits::size_type;
+    using typename base::size_type;
 
   protected:
-    iterator _begin;
-    sentinel _end;
+    I _begin{};
+    S _end{};
 
   public:
+    iterator_pair() = default;
     iterator_pair(I beg, S end)
       : _begin(beg)
       , _end(end)
@@ -36,27 +31,27 @@ template<typename I, typename S = I> struct iterator_pair : public view_facade<i
 
     template<typename R,
              typename = enable_if_t<!std::is_same<remove_reference_t<R>, iterator_pair>::value
-                                    && std::is_convertible<iterator_t<R>, iterator>::value
-                                    && std::is_convertible<sentinel_t<R>, sentinel>::value>>
-    iterator_pair(R& range)
+                                    && std::is_convertible<iterator_t<R>, I>::value
+                                    && std::is_convertible<sentinel_t<R>, S>::value>>
+    constexpr iterator_pair(R&& range)
       : _begin(gatbl::begin(range))
       , _end(gatbl::end(range))
     {}
 
-    template<typename _I,
-             typename = decltype(concepts::value_require<I, S>(std::declval<_I>(), std::declval<_I>() + size_t(1)))>
-    iterator_pair(const _I& it, size_t size)
+    template<typename _I, typename = decltype(concepts::value_require<I, S>(std::declval<_I>(), std::declval<_I>()))>
+    CPP14_CONSTEXPR iterator_pair(const _I& it, size_type size)
       : _begin(it)
-      , _end(it + size)
-    {}
+      , _end(it)
+    {
+        using std::advance;
+        advance(_end, size);
+    }
 
     iterator_pair(const iterator_pair&) = default;
-    iterator_pair(iterator_pair&&)      = default;
     iterator_pair& operator=(const iterator_pair&) = default;
-    iterator_pair& operator=(iterator_pair&&) = default;
 
-    iterator begin() const noexcept { return _begin; }
-    sentinel end() const noexcept { return _end; }
+    I begin() const noexcept { return _begin; }
+    S end() const noexcept { return _end; }
 };
 
 ///// Specialization for pointer ranges (aka span)
@@ -66,46 +61,11 @@ template<typename I, typename S = I> struct iterator_pair : public view_facade<i
 //    using sentinel        = T*;
 //    using reference       = decltype(*std::declval<iterator>());
 //    using const_reference = decltype(*std::declval<const_iterator>());
-//    using element_type    = remove_reference_t<reference>;
+//    using value_type    = remove_reference_t<reference>;
 //    using size_type       = make_unsigned_t<typename std::iterator_traits<iterator>::difference_type>;
 //};
 
-template<typename I, typename S, typename CI>
-auto
-size(const iterator_pair<I, S>& r) -> make_unsigned_t<decltype(distance(begin(r), end(r)))>
-{
-    return std::distance(begin(r), end(r));
-}
-
 template<typename T> using span = iterator_pair<T*, T*>;
-
-template<typename T>
-byte*
-as_bytes(T* p)
-{
-    return reinterpret_cast<byte*>(p);
-}
-
-template<typename T>
-const byte*
-as_bytes(const T* p)
-{
-    return reinterpret_cast<const byte*>(p);
-}
-
-template<typename R>
-auto
-as_bytes(const R& r) -> decltype(span<const byte>(as_bytes(begin(r)), size(r) * sizeof(*begin(r))))
-{
-    return {as_bytes(begin(r)), size(r)};
-}
-
-template<typename R>
-auto
-as_bytes(R& r) -> decltype(span<byte>(as_bytes(begin(r)), size(r) * sizeof(*begin(r))))
-{
-    return {as_bytes(begin(r)), size(r) * sizeof(*begin(r))};
-}
 
 template<typename R> struct default_splitter
 {
