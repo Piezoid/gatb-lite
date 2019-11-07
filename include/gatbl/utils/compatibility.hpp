@@ -32,13 +32,14 @@ using std::make_unique;
 // Type alias for *::type
 using std::conditional_t;
 using std::enable_if_t;
+using std::make_signed_t;
 using std::make_unsigned_t;
 using std::remove_const_t;
 using std::remove_reference_t;
 
 #    define CPP14_CONSTEXPR constexpr
 
-#else
+#else // __cplusplus >= 201402L
 template<typename C>
 inline constexpr auto
 cbegin(const C& c) -> decltype(c.begin())
@@ -131,6 +132,7 @@ make_unique(size_t n)
 
 template<class T> using remove_const_t                 = typename std::remove_const<T>::type;
 template<class T> using remove_reference_t             = typename std::remove_reference<T>::type;
+template<class T> using make_signed_t                  = typename std::make_signed<T>::type;
 template<class T> using make_unsigned_t                = typename std::make_unsigned<T>::type;
 template<bool B, class T = void> using enable_if_t     = typename std::enable_if<B, T>::type;
 template<bool I, class T, class E> using conditional_t = typename std::conditional<I, T, E>::type;
@@ -150,7 +152,7 @@ using std::size;
 #    define CPP17_STATIC_INLINE_VAR inline
 #    define CPP17_IF_CONSTEXPR if constexpr
 
-#else
+#else // __cplusplus >= 201703L
 template<typename C>
 inline constexpr auto
 size(const C& c) -> decltype(c.size())
@@ -202,6 +204,11 @@ enum class byte : unsigned char {};
 
 #endif // __cplusplus >= 201402L
 
+#if __cplusplus > 201703L //FIXME: C++20
+    using std::contiguous_iterator_tag;
+#else // __cplusplus > 201703L
+    struct contiguous_iterator_tag : public std::random_access_iterator_tag {};
+#endif // __cplusplus > 201703L
 }
 
 #endif // COMPATIBILITY_HPP

@@ -8,11 +8,11 @@ namespace gatbl {
 template<typename T, typename D = std::default_delete<T[]>> struct unique_range : private D
 {
 
-    using element_type    = T;
-    using reference       = element_type&;
-    using const_reference = const element_type&;
-    using iterator        = element_type*;
-    using const_iterator  = const element_type*;
+    using value_type      = T;
+    using reference       = value_type&;
+    using const_reference = const value_type&;
+    using iterator        = value_type*;
+    using const_iterator  = const value_type*;
     using sentinel        = const_iterator;
 
     constexpr unique_range() = default;
