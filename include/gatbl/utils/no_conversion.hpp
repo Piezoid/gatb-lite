@@ -39,7 +39,9 @@ template<typename T, typename E> struct is_same_cvref<T, const T&&, E> : std::tr
     using enable_t = E;
 };
 
+#if __cplusplus >= 201402L
 template<typename T, typename U> constexpr bool is_same_cvref_v = is_same_cvref<T, U>::value;
+#endif // __cplusplus >= 201402L
 
 template<typename T, typename U, typename Enabled = void>
 using if_is_same_cvref = typename is_same_cvref<T, U, Enabled>::enable_t;
