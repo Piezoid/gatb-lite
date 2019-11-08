@@ -26,35 +26,11 @@
 
 namespace gatbl { namespace sys {
 
-struct sized
+struct bound_cursor
 {
     size_t size() const noexcept { return _size; }
-
-  protected:
-    void setSize(size_t size) noexcept { _size = size; }
-
-  private:
-    size_t _size = 0;
-};
-
-struct cursor
-{
     size_t tell() const noexcept { return _pos; }
-
-  protected:
-    size_t setPosition(size_t pos) noexcept { return _pos = pos; }
-    size_t incPosition(ssize_t delta) noexcept { return setPosition(tell() + delta); }
-    void   operator++() noexcept { incPosition(1); }
-
-  private:
-    size_t _pos = 0;
-};
-
-struct bound_cursor
-  : public sized
-  , public cursor
-{
-    bool eof() const noexcept { return tell() >= size(); }
+    bool   eof() const noexcept { return tell() >= size(); }
 
     /// We use a user-space position since async read don't use the native file descriptor position
     size_t seek(off_t offset, int whence = SEEK_SET)
@@ -69,15 +45,29 @@ struct bound_cursor
     }
 
   protected:
+    void   setSize(size_t size) noexcept { _size = size; }
     size_t setPosition(ssize_t pos) noexcept
     {
         // clamp
         size_t new_pos = likely(pos > 0) ? size_t(pos) : 0;
         new_pos        = likely(new_pos < size()) ? new_pos : size();
-        return cursor::setPosition(new_pos);
+        return _pos    = new_pos;
     }
     size_t incPosition(ssize_t delta) noexcept { return setPosition(ssize_t(tell()) + delta); }
-    void   operator++() noexcept { incPosition(1); }
+    size_t incSize(ssize_t delta) noexcept
+    {
+        auto ssize = ssize_t(_size) + delta;
+        assume(ssize >= 0, "size underflow");
+        auto new_size = size_t(ssize);
+        _size         = likely(_size <= new_size) ? new_size : _size;
+        return _size;
+    }
+
+    void operator++() noexcept { incPosition(1); }
+
+  private:
+    size_t _pos  = 0;
+    size_t _size = 0;
 };
 
 struct file_descriptor : public bound_cursor
@@ -112,7 +102,7 @@ struct file_descriptor : public bound_cursor
       : bound_cursor(from)
 
       , _stat(from._stat)
-      , _fd(int(sys::check_ret(::dup(from._fd), "dup")))
+      , _fd(sys::check_ret(::dup(from._fd), "dup"))
     {}
 
     /// Assignement constructor
@@ -120,7 +110,7 @@ struct file_descriptor : public bound_cursor
     {
         close();
 
-        _fd   = int(sys::check_ret(dup(from._fd), "dup"));
+        _fd   = sys::check_ret(dup(from._fd), "dup");
         _stat = from._stat;
 
         bound_cursor::operator=(from);
@@ -132,7 +122,7 @@ struct file_descriptor : public bound_cursor
                                     mode_t      mode   = 0700,
                                     bool        unlink = true)
     {
-        const unsigned fd = sys::check_ret(::shm_open(name, oflag, mode), "shm_open");
+        const int fd = sys::check_ret(::shm_open(name, oflag, mode), "shm_open");
         if (unlink) { sys::check_ret(::shm_unlink(name), "shm_unlink"); }
         return file_descriptor(fd);
     }
@@ -181,8 +171,8 @@ struct file_descriptor : public bound_cursor
         using gatbl::as_bytes;
         using gatbl::size;
         const auto buf_bytes = as_bytes(buf);
-        size_t     sz        = sys::check_ret(::pwrite(_fd, begin(buf_bytes), size(buf_bytes), offset), "pwrite");
-        if (offset + sz > this->size()) setSize(offset + sz);
+        ssize_t    sz        = sys::check_ret(::pwrite(_fd, begin(buf_bytes), size(buf_bytes), offset), "pwrite");
+        this->incSize(sz);
         return sz;
     }
 
@@ -201,15 +191,12 @@ struct file_descriptor : public bound_cursor
     }
 
 #ifdef __linux__
-    size_t readahead(off64_t offset, size_t count) const
+    ssize_t readahead(off64_t offset, size_t count) const
     {
         return sys::check_ret(::readahead(_fd, offset, count), "readahead");
     }
 #else
-     size_t readahead(off_t offset, size_t count) const
-     {
-        return 0;
-     }
+    size_t readahead(off_t offset, size_t count) const { return 0; }
 #endif
     void close()
     {
@@ -222,10 +209,10 @@ struct file_descriptor : public bound_cursor
     operator bool() const noexcept { return _fd > 0; }
 
   protected:
-    explicit file_descriptor(unsigned fd)
+    explicit file_descriptor(int fd)
       : _fd(fd)
     {
-        sys::check_ret(::fstat(int(fd), &_stat), "stat");
+        sys::check_ret(::fstat(fd, &_stat), "stat");
         this->setSize(size_t(_stat.st_size));
     }
 

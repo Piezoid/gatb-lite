@@ -11,7 +11,7 @@ namespace gatbl {
 
 namespace details {
 
-CPP17_STATIC_INLINE_VAR const size_t page_size = sys::check_ret(::sysconf(_SC_PAGESIZE), "page size");
+CPP17_STATIC_INLINE_VAR const size_t page_size = size_t(sys::check_ret(::sysconf(_SC_PAGESIZE), "page size"));
 
 template<typename T> struct munmapper
 {

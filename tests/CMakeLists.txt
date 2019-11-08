@@ -4,7 +4,7 @@ list(APPEND test_sources "kmer.cpp")
 list(APPEND test_sources "memory.cpp")
 
 add_executable(tests "main.cpp" ${test_sources})
-set_source_files_properties(${test_sources} PROPERTIES COMPILE_FLAGS "-UNDEBUG -fsanitize=address -fsanitize=undefined -Werror -Wall -Wextra")
+set_source_files_properties(${test_sources} PROPERTIES COMPILE_FLAGS "-UNDEBUG -fsanitize=address -fsanitize=undefined -Werror -Wall -Wextra -Wconversion -pedantic-errors -Wno-gnu-zero-variadic-macro-arguments")
 target_link_options(tests PRIVATE -fsanitize=address -fsanitize=undefined)
 target_link_libraries(tests gatbl Catch2)
 

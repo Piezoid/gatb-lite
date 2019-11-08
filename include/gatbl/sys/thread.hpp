@@ -33,7 +33,7 @@ pin_to_cpu(unsigned cpu)
     sys::check_ret(pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset), "pthread_setaffinity_np failed");
 
     pthread_yield();
-    for (unsigned i = 0; sys::check_ret(sched_getcpu(), "sched_getcpu") != cpu; ++i) {
+    for (int i = 0; sys::check_ret(sched_getcpu(), "sched_getcpu") != int(cpu); ++i) {
         pthread_yield();
         if (i >= 1024) {
             std::cerr << "Failled to migrate to CPU " << cpu << " (currently on " << sched_getcpu()

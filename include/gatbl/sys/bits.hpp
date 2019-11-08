@@ -4,10 +4,9 @@
 #include "gatbl/common.hpp"
 #include <climits>
 #include <cstdint>
-#include <limits>
-#include <utility>
-#include <algorithm>
 
+// FIXME: split bits.hpp in two parts, with the second that doesn't require those includes:
+#include <algorithm>
 #include "gatbl/utils/ranges.hpp"
 
 namespace gatbl {
@@ -634,7 +633,7 @@ load_int_vb(const uint8_t* src, const uint8_t* src_end, size_t& value)
 
     assume(src < src_end, "Unfinished variable byte code");
     assume(offset < bits::bitwidth<size_t>(), "variable byte code too long for size_t");
-    _value |= (*src++) << offset;
+    _value |= size_t(*src++) << offset;
     value = _value;
     return src;
 }
@@ -646,7 +645,7 @@ inline uint8_t*
 store_int_vb(uint8_t* dst, const uint8_t* dst_end, size_t value)
 {
     while (value >= 128 && likely(dst < dst_end)) {
-        *dst++ = (value & 127u) | 128u;
+        *dst++ = uint8_t(value & 127u) | 128u;
         value >>= 7u;
     }
     if (likely(dst < dst_end)) { *dst++ = uint8_t(value); }
