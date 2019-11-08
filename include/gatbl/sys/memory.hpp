@@ -2,8 +2,6 @@
 #define MEMORY_HPP
 
 #include <memory>
-#include <type_traits>
-#include <cstring>
 
 #include "gatbl/common.hpp"
 #include "gatbl/utils/compatibility.hpp"
@@ -25,17 +23,16 @@ template<typename T> struct free_delete
     }
 };
 
-// Memory allocated for arrays of non-trivially-destructible objects have a header before the first object
-template<typename T>
-static constexpr size_t malloc_array_header_size
-  = std::is_trivially_destructible<T>::value ? 0 : (sizeof(T) > sizeof(size_t) ? sizeof(T) : sizeof(size_t));
-
 template<typename T> struct free_delete<T[]>
 {
+    // Memory allocated for arrays of non-trivially-destructible objects have a header before the first object
+    static constexpr size_t header_size
+      = std::is_trivially_destructible<T>::value ? 0 : (sizeof(T) > sizeof(size_t) ? sizeof(T) : sizeof(size_t));
+
+    /// Allows instances to be used as a deleter
     void operator()(T* ptr) const
     {
         assume(ptr != nullptr, "free_delete(nullptr)");
-        constexpr size_t header_size = malloc_array_header_size<T>;
         CPP17_IF_CONSTEXPR(header_size > 0)
         { // non-trivially-destructible objects
             // Retreive the size of the array stored before the first element
@@ -45,6 +42,21 @@ template<typename T> struct free_delete<T[]>
 
         // Retreive the original pointer from the malloc/aligned_alloc allocation
         free(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(ptr) - header_size));
+    }
+
+    static T* allocate(size_t n)
+    {
+        const size_t alloc_bytes = n * sizeof(T) + header_size;
+        void*        void_ptr;
+
+        constexpr size_t align = alignof(T) > sizeof(void*) ? alignof(T) : sizeof(void*);
+        if (posix_memalign(&void_ptr, align, alloc_bytes) != 0) { throw std::bad_alloc(); }
+        auto first_object = reinterpret_cast<uintptr_t>(void_ptr) + header_size;
+
+        // Store the array size before the first object
+        *(reinterpret_cast<size_t*>(first_object) - 1) = n;
+
+        return reinterpret_cast<T*>(first_object);
     }
 };
 
@@ -79,20 +91,8 @@ template<typename Arr>
 unique_malloc_ptr<typename concepts::extent_kind<Arr>::unknown_bound_array[]>
 make_unique_aligned_uninitialized(size_t n)
 {
-    using base_type              = typename concepts::extent_kind<Arr>::base_type;
-    constexpr size_t header_size = details::malloc_array_header_size<base_type>;
-
-    const size_t alloc_bytes = n * sizeof(base_type) + header_size;
-    void*        void_ptr;
-
-    constexpr size_t align = alignof(base_type) > sizeof(void*) ? alignof(base_type) : sizeof(void*);
-    if (posix_memalign(&void_ptr, align, alloc_bytes) != 0) { throw std::bad_alloc(); }
-
-    // Store the array size before the first object
-    auto first_object = reinterpret_cast<uintptr_t>(void_ptr) + header_size;
-    CPP17_IF_CONSTEXPR(header_size > 0) * (reinterpret_cast<size_t*>(first_object) - 1) = n;
-
-    return unique_malloc_ptr<base_type[]>(reinterpret_cast<base_type*>(first_object));
+    using base_type = typename concepts::extent_kind<Arr>::base_type;
+    return unique_malloc_ptr<base_type[]>(details::free_delete<base_type[]>::allocate(n));
 }
 
 /** A static array (on the heap or stack) of unitialized elements
@@ -100,7 +100,7 @@ make_unique_aligned_uninitialized(size_t n)
  * The user is responsable of only acessing elements initialized with emplace_at().
  * Before destruction all initialized elements must be deleted with pop_at()
  */
-template<typename T, size_t size, bool heap = true, size_t align = alignof(T)> struct uninitialized_array;
+template<typename T, size_t size, bool heap = true, size_t align = alignof(T)> class uninitialized_array;
 
 namespace details {
 
@@ -182,9 +182,7 @@ unique_malloc_ptr<typename concepts::extent_kind<T>::single_object>
 make_unique_aligned(Args&&... args)
 {
     auto ptr = unsafe::make_unique_aligned_uninitialized<T>();
-
     new (ptr.get()) T(std::forward<Args>(args)...);
-
     return ptr;
 }
 
@@ -197,19 +195,8 @@ make_unique_aligned(size_t n)
 {
     using base_type = typename concepts::extent_kind<Arr>::base_type;
 
-    auto       uptr = unsafe::make_unique_aligned_uninitialized<Arr>(n);
-    base_type* ptr  = uptr.get();
-
-    CPP17_IF_CONSTEXPR(std::is_trivially_constructible<base_type>::value)
-    {
-        std::memset(ptr, 0, n * sizeof(base_type));
-    }
-    else
-    {
-        // Initialize the items with placement new and default constructor
-        for (base_type* it = ptr + n; it-- > ptr;)
-            new (it) base_type{};
-    }
+    auto uptr = unsafe::make_unique_aligned_uninitialized<Arr>(n);
+    new (uptr.get()) base_type[n]{};
     return uptr;
 }
 }
