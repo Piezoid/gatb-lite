@@ -43,8 +43,8 @@ struct CacheLevel
     static constexpr size_t align       = l1_size; // >64
     static constexpr size_t nelems_line = line_size / sizeof(vec_t);
 
-    static_assert(line_size % sizeof(vec_t) == 0);
-    static_assert(align >= line_size);
+    static_assert(line_size % sizeof(vec_t) == 0, "fractional number of words in a cache line");
+    static_assert(align >= line_size, "sub-aligned to cache lines");
 
     /// Allocate a blob of `size` bytes
     CacheLevel(size_t size)
