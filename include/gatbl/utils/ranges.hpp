@@ -347,15 +347,15 @@ template<typename T, typename = enable_if_t<sizeof(T) == 1>>
 inline T*
 find(T* first, const T* last, T v)
 {
-    T* p = static_cast<T*>(memchr(first, reinterpret_cast<int&>(v), last - first));
-    return likely(p != nullptr) ? p : last;
+    auto p = static_cast<T*>(memchr(first, reinterpret_cast<const char&>(v), last - first));
+    return likely(p != nullptr) ? p : const_cast<T*>(last);
 }
 
 template<typename T, typename = enable_if_t<sizeof(T) == 1>>
 inline const T*
 find(const T* first, const T* last, T v)
 {
-    const T* p = static_cast<const T*>(memchr(first, reinterpret_cast<int&>(v), last - first));
+    const T* p = static_cast<const T*>(memchr(first, reinterpret_cast<const char&>(v), last - first));
     return likely(p != nullptr) ? p : last;
 }
 
