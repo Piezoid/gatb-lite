@@ -22,8 +22,8 @@
 void
 print_backtrace()
 {
-    void*  array[24];
-    size_t size;
+    void* array[24];
+    int   size;
 
     // get void*'s for all entries on the stack
     size = backtrace(array, 24);

@@ -347,7 +347,8 @@ template<typename T, typename = enable_if_t<sizeof(T) == 1>>
 inline T*
 find(T* first, const T* last, T v)
 {
-    auto p = static_cast<T*>(memchr(first, reinterpret_cast<const char&>(v), last - first));
+    assume(first <= last, "swapped iterators");
+    auto p = static_cast<T*>(memchr(first, reinterpret_cast<const char&>(v), size_t(last - first)));
     return likely(p != nullptr) ? p : const_cast<T*>(last);
 }
 
@@ -355,7 +356,8 @@ template<typename T, typename = enable_if_t<sizeof(T) == 1>>
 inline const T*
 find(const T* first, const T* last, T v)
 {
-    const T* p = static_cast<const T*>(memchr(first, reinterpret_cast<const char&>(v), last - first));
+    assume(first <= last, "swapped iterators");
+    const T* p = static_cast<const T*>(memchr(first, reinterpret_cast<const char&>(v), size_t(last - first)));
     return likely(p != nullptr) ? p : last;
 }
 
