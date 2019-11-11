@@ -132,6 +132,71 @@ using bitset_default_word_t               = size_t;
 template<size_t N> using uint_t      = typename details::uint<N>::type;
 template<size_t N> using uint_fast_t = typename details::uint<N>::fast_type;
 
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+template<typename T>
+static CPP14_CONSTEXPR T
+load_le(const T* ptr)
+{
+    T v;
+    memcpy(&v, ptr, sizeof(T));
+    return v;
+}
+
+template<typename T>
+static CPP14_CONSTEXPR auto
+load_be(const T* ptr) -> decltype(details::bswap(load_le(ptr)))
+{
+    return details::bswap(load_le(ptr));
+}
+
+template<typename T>
+static CPP14_CONSTEXPR void
+store_le(T* restrict ptr, const T& restrict v)
+{
+    memcpy(ptr, &v, sizeof(T));
+}
+
+template<typename T>
+static CPP14_CONSTEXPR auto
+store_be(T* restrict ptr, const T& restrict v) -> decltype(store_le(ptr, details::bswap(v)))
+{
+    store_le(ptr, details::bswap(v));
+}
+
+#else
+
+template<typename T>
+static CPP14_CONSTEXPR T
+load_be(const T* ptr)
+{
+    T v;
+    memcpy(&v, ptr, sizeof(T));
+    return v;
+}
+
+template<typename T>
+static CPP14_CONSTEXPR auto
+load_le(const T* ptr) -> decltype(details::bswap(load_be(ptr)))
+{
+    return details::bswap(load_be(ptr));
+}
+
+template<typename T>
+static CPP14_CONSTEXPR void
+store_be(T* restrict ptr, const T& restrict v)
+{
+    memcpy(ptr, &v, sizeof(T));
+}
+
+template<typename T>
+static CPP14_CONSTEXPR auto
+store_le(T* restrict ptr, const T& restrict v) -> decltype(store_be(ptr, details::bswap(v)))
+{
+    store_be(ptr, details::bswap(v));
+}
+
+#endif
+
 template<typename T>
 inline constexpr concepts::if_unsigned_t<T, std::integral_constant<size_t, sizeof(T) * CHAR_BIT>>
 bitwidth()

@@ -2,6 +2,7 @@ list(APPEND test_sources "fastx.cpp")
 list(APPEND test_sources "sched.cpp")
 list(APPEND test_sources "kmer.cpp")
 list(APPEND test_sources "memory.cpp")
+list(APPEND test_sources "int_vector.cpp")
 
 add_executable(tests "main.cpp" ${test_sources})
 set_source_files_properties(${test_sources} PROPERTIES COMPILE_FLAGS "-UNDEBUG -fsanitize=address -fsanitize=undefined -Werror -Wall -Wextra -Wconversion -pedantic-errors -Wno-gnu-zero-variadic-macro-arguments")
