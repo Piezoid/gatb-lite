@@ -11,6 +11,7 @@
 #include <stdexcept>
 
 #include "gatbl/common.hpp"
+#include "gatbl/utils/nucleotide.hpp"
 #include "gatbl/utils/ranges.hpp"
 #include "gatbl/utils/no_conversion.hpp"
 #include "gatbl/sys/bits.hpp"
@@ -22,38 +23,6 @@ namespace gatbl {
 using ksize_t     = bits::bitsize_t; // Nucleotide incides inside kmers
 using kmer_t      = uint64_t;        // k-mers, uint64_t for k<32, uint64_t for k<64
 using minimizer_t = uint32_t;        // Minimizers
-
-using nucint_t = uint_fast8_t;
-enum class nuc_t : nucint_t { A = 0, C, T, G, N = 255 };
-
-template<typename T = nucint_t>
-static inline enable_if_t<T(0) < T(-1), T>
-as_integer(nuc_t n)
-{
-    auto i = static_cast<uint_fast8_t>(n);
-    assume(i < 4, "invalid nucleotide %u", unsigned(i));
-    return i;
-}
-
-template<typename T>
-static inline enable_if_t<T(0) < T(-1), nuc_t>
-as_nuc(T n)
-{
-    assume(n < 4 || n == as_integer<T>(nuc_t::N), "invalid nucleotide %u", unsigned(n));
-    return nuc_t(n);
-}
-
-inline nucint_t
-complement(nucint_t nuc)
-{
-    return nuc ^ nucint_t(2u);
-}
-
-inline nuc_t
-complement(nuc_t nuc)
-{
-    return as_nuc(complement(as_integer(nuc)));
-}
 
 struct complement_functor
 {
