@@ -19,7 +19,7 @@ template<typename T> struct munmapper
     {
         const size_t bytes = size_to_bytes(n);
         if (unlikely(bytes == 0)) return;
-        sys::check_ret(::munmap(unconst_void(addr), bytes), "munmap");
+        sys::check_ret(::munmap(unconst_void(addr), bytes), "munmap(%p, %zu)", addr, bytes);
     }
 
     static constexpr inline void* unconst_void(const void* p) noexcept { return const_cast<void*>(p); }

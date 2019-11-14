@@ -18,17 +18,15 @@ namespace gatbl { namespace sys {
 noreturn_attr noinline_fun inline cold_fun void
 throw_syserr(const char fmt[]...) // No variadic template, avoiding to generate too much code
 {
-    va_list     args;
-    std::string _what;
-
-    int errcode = 0;
+    char msg[128];
+    int  errcode = 0;
     std::swap(errcode, errno);
-
-    int size = vsnprintf(nullptr, 0, fmt, args);
-    if (size < 0) { std::terminate(); }
-    _what.resize(static_cast<size_t>(size));
-
-    throw std::system_error(errcode, std::generic_category(), _what);
+    va_list args;
+    va_start(args, fmt);
+    int size = vsnprintf(msg, sizeof(msg), fmt, args);
+    va_end(args);
+    if (size < 0 || size_t(size) >= sizeof(msg)) { std::terminate(); }
+    throw std::system_error(errcode, std::generic_category(), msg);
 }
 
 template<typename T, typename... Args>

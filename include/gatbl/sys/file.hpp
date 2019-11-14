@@ -73,7 +73,7 @@ struct bound_cursor
 struct file_descriptor : public bound_cursor
 {
     file_descriptor(const std::string& path, int flags = O_RDONLY, mode_t mode = S_IRUSR | S_IWUSR)
-      : file_descriptor(sys::check_ret(::open(path.c_str(), flags, mode), "open"))
+      : file_descriptor(sys::check_ret(::open(path.c_str(), flags, mode), "open(\"%s\", %o)", path.c_str(), mode))
     {}
 
     file_descriptor(file_descriptor&& from) noexcept
@@ -102,7 +102,7 @@ struct file_descriptor : public bound_cursor
       : bound_cursor(from)
 
       , _stat(from._stat)
-      , _fd(sys::check_ret(::dup(from._fd), "dup"))
+      , _fd(sys::check_ret(::dup(from._fd), "dup(%d)", _fd))
     {}
 
     /// Assignement constructor
@@ -110,7 +110,7 @@ struct file_descriptor : public bound_cursor
     {
         close();
 
-        _fd   = sys::check_ret(dup(from._fd), "dup");
+        _fd   = sys::check_ret(dup(from._fd), "dup(%d)", from._fd);
         _stat = from._stat;
 
         bound_cursor::operator=(from);
@@ -122,8 +122,8 @@ struct file_descriptor : public bound_cursor
                                     mode_t      mode   = 0700,
                                     bool        unlink = true)
     {
-        const int fd = sys::check_ret(::shm_open(name, oflag, mode), "shm_open");
-        if (unlink) { sys::check_ret(::shm_unlink(name), "shm_unlink"); }
+        const int fd = sys::check_ret(::shm_open(name, oflag, mode), "shm_open(\"%s\", %o, %o)", name, oflag, mode);
+        if (unlink) { sys::check_ret(::shm_unlink(name), "shm_unlink(\"%s\")", name); }
         return file_descriptor(fd);
     }
 
@@ -137,7 +137,7 @@ struct file_descriptor : public bound_cursor
 
     size_t truncate(size_t length)
     {
-        sys::check_ret(::ftruncate(_fd, off_t(length)), "ftruncate");
+        sys::check_ret(::ftruncate(_fd, off_t(length)), "ftruncate(%d, %zd)", _fd, length);
         this->setSize(length);
         return length;
     }
@@ -147,7 +147,8 @@ struct file_descriptor : public bound_cursor
         if (offset == 0 && len == 0) { len = off_t(this->size()); }
 
 #ifdef POSIX_FADV_SEQUENTIAL
-        sys::check_ret(::posix_fadvise(_fd, offset, len, advise), "posix_fadvise");
+        sys::check_ret(
+          ::posix_fadvise(_fd, offset, len, advise), "posix_fadvise(%d, %zd, %zd, %d)", _fd, offset, len, advise);
 #endif
     }
 
@@ -168,7 +169,11 @@ struct file_descriptor : public bound_cursor
         using gatbl::as_bytes;
         using gatbl::size;
         const auto buf_bytes = as_bytes(buf);
-        return sys::check_ret(::pread(_fd, begin(buf_bytes), size(buf_bytes), offset), "pread");
+        return sys::check_ret(::pread(_fd, begin(buf_bytes), size(buf_bytes), offset),
+                              "pread(%d, buf, %zd, %zd)",
+                              _fd,
+                              size(buf_bytes),
+                              offset);
     }
 
     template<typename Buffer>
@@ -177,7 +182,11 @@ struct file_descriptor : public bound_cursor
         using gatbl::as_bytes;
         using gatbl::size;
         const auto buf_bytes = as_bytes(buf);
-        ssize_t    sz        = sys::check_ret(::pwrite(_fd, begin(buf_bytes), size(buf_bytes), offset), "pwrite");
+        ssize_t    sz        = sys::check_ret(::pwrite(_fd, begin(buf_bytes), size(buf_bytes), offset),
+                                    "pwrite(%d, buf, %zd, %zd)",
+                                    _fd,
+                                    size(buf_bytes),
+                                    offset);
         this->incSize(sz);
         return sz;
     }
@@ -199,14 +208,14 @@ struct file_descriptor : public bound_cursor
 #ifdef __linux__
     ssize_t readahead(off64_t offset, size_t count) const
     {
-        return sys::check_ret(::readahead(_fd, offset, count), "readahead");
+        return sys::check_ret(::readahead(_fd, offset, count), "readahead(%d, %zd, %zu)", _fd, offset, count);
     }
 #else
     size_t readahead(off_t offset, size_t count) const { return 0; }
 #endif
     void close()
     {
-        if (_fd >= 0) { sys::check_ret(::close(_fd), "close"); }
+        if (_fd >= 0) { sys::check_ret(::close(_fd), "close(%d)", _fd); }
         _fd = -1;
     }
 
@@ -218,7 +227,7 @@ struct file_descriptor : public bound_cursor
     explicit file_descriptor(int fd)
       : _fd(fd)
     {
-        sys::check_ret(::fstat(fd, &_stat), "stat");
+        sys::check_ret(::fstat(fd, &_stat), "stat(%d)", fd);
         this->setSize(size_t(_stat.st_size));
     }
 
