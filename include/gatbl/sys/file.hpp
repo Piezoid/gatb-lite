@@ -127,6 +127,12 @@ struct file_descriptor : public bound_cursor
         return file_descriptor(fd);
     }
 
+    static file_descriptor make_memfd(const char* name = "", unsigned int flags = 0)
+    {
+        const int fd = sys::check_ret(::memfd_create(name, flags), "memfd_create");
+        return file_descriptor(fd);
+    }
+
     size_t blksize() const noexcept { return static_cast<size_t>(_stat.st_blksize); }
 
     size_t truncate(size_t length)
