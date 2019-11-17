@@ -11,7 +11,7 @@ namespace gatbl {
 
 namespace details {
 
-CPP17_STATIC_INLINE_VAR const size_t page_size = size_t(sys::check_ret(::sysconf(_SC_PAGESIZE), "page size"));
+CPP17_STATIC_INLINE_VAR const size_t page_size = size_t(check_ret(::sysconf(_SC_PAGESIZE), "page size"));
 
 template<typename T> struct munmapper
 {
@@ -19,7 +19,7 @@ template<typename T> struct munmapper
     {
         const size_t bytes = size_to_bytes(n);
         if (unlikely(bytes == 0)) return;
-        sys::check_ret(::munmap(unconst_void(addr), bytes), "munmap(%p, %zu)", addr, bytes);
+        check_ret(::munmap(unconst_void(addr), bytes), "munmap(%p, %zu)", addr, bytes);
     }
 
     static constexpr inline void* unconst_void(const void* p) noexcept { return const_cast<void*>(p); }
@@ -59,7 +59,7 @@ template<typename T> class mmap_range : public unique_range<T, details::munmappe
         if (likely(ptr != MAP_FAILED)) {
             *this = base(ptr, len, {});
         } else {
-            sys::throw_syserr("mmap(%p, %lu, %d, %d, %d, %ld)", addr, bytes, prot, flags, fd, offset);
+            throw_syserr("mmap(%p, %lu, %d, %d, %d, %ld)", addr, bytes, prot, flags, fd, offset);
         }
     }
 
@@ -85,7 +85,7 @@ template<typename T> class mmap_range : public unique_range<T, details::munmappe
         void*  addr  = unmapper::unconst_void(this->begin() + sizeof(T) * from);
         size_t bytes = sizeof(T) * len;
 
-        sys::check_ret(::madvise(addr, bytes, advice), error_msg, addr, bytes, advice);
+        check_ret(::madvise(addr, bytes, advice), error_msg, addr, bytes, advice);
     }
 };
 

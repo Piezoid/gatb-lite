@@ -16,7 +16,7 @@
 
 #include "gatbl/sys/exceptions.hpp"
 
-namespace gatbl { namespace sys {
+namespace gatbl {
 
 /// Pin the current thread to a single cpu and wait for it's migration
 inline void
@@ -30,10 +30,10 @@ pin_to_cpu(unsigned cpu)
 
     CPU_ZERO(&cpuset);
     CPU_SET(cpu, &cpuset);
-    sys::check_ret(pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset), "pthread_setaffinity_np failed");
+    check_ret(pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset), "pthread_setaffinity_np failed");
 
     pthread_yield();
-    for (int i = 0; sys::check_ret(sched_getcpu(), "sched_getcpu") != int(cpu); ++i) {
+    for (int i = 0; check_ret(sched_getcpu(), "sched_getcpu") != int(cpu); ++i) {
         pthread_yield();
         if (i >= 1024) {
             std::cerr << "Failled to migrate to CPU " << cpu << " (currently on " << sched_getcpu()
@@ -72,8 +72,8 @@ run_pinned_worker_pool(unsigned ncpu, const Args&&... args)
         // FIXME: correct alignement for overaligned types is only respected for after cpp17
         // auto worker = make_unique<Worker>(Args(static_cast<const Args&>(args))...);
         Worker* worker = nullptr;
-        sys::check_ret(posix_memalign(reinterpret_cast<void**>(&worker), alignof(Worker), sizeof(Worker)),
-                       "Failled allocating aligned memory");
+        check_ret(posix_memalign(reinterpret_cast<void**>(&worker), alignof(Worker), sizeof(Worker)),
+                  "Failled allocating aligned memory");
         new (worker) Worker(Args(static_cast<const Args&>(args))...);
 
         {
@@ -103,7 +103,6 @@ run_pinned_worker_pool(unsigned ncpu, const Args&&... args)
         thread.join();
 }
 
-} // namespace sys
 } // namespace gatbl
 
 #endif // THREAD_HPP

@@ -99,8 +99,8 @@ struct sequence2kmers_base : private Window
     /// Read a fasta or a fastx and feeds all the reads
     void read_fastx(const std::string& fin)
     {
-        gatbl::sys::file_descriptor fd(fin);
-        auto                        content = fd.mmap<const char>();
+        gatbl::file_descriptor fd(fin);
+        auto                   content = fd.mmap<const char>();
         content.advise_hugepage();
 
         if (hasEnding(fin, ".fq") || hasEnding(fin, ".fastq")) {

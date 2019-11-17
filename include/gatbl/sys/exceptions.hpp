@@ -13,7 +13,7 @@
 #include "gatbl/common.hpp"
 #include "gatbl/utils/compatibility.hpp"
 
-namespace gatbl { namespace sys {
+namespace gatbl {
 // The oxymoric "noinline inline" means that we want a weak non inlineable function
 noreturn_attr noinline_fun inline cold_fun void
 throw_syserr(const char fmt[]...) // No variadic template, avoiding to generate too much code
@@ -52,7 +52,6 @@ forceinline_fun hot_fun T*
     return ret;
 }
 
-} // namespace sys
 } // namespace gatbl
 
 #endif // EXCEPTIONS_H

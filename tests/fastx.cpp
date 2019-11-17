@@ -63,8 +63,8 @@ mmap_sequence_iter_test(const char* filename, const size_t correct_seq_num = 4, 
 {
     GIVEN("A mmap of this file")
     {
-        sys::file_descriptor fd(filename);
-        auto                 data = fd.mmap<const char>();
+        file_descriptor fd(filename);
+        auto            data = fd.mmap<const char>();
 
         sequence_iter_test<record_t>(data, correct_seq_num, correct_length);
     }
