@@ -748,7 +748,7 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
         base_jobslot root; // Slot holding the main task
         // This token, held during the lifetime of the work pool, act as a witnedd for the termination of all the tasks
         const auto token = root.template init<typed<F, jobtoken>>(std::forward<Args>(args)...);
-        sys::run_pinned_worker_pool<worker>(ncpu, std::cref(token));
+        run_pinned_worker_pool<worker>(ncpu, std::cref(token));
     }
 
     template<typename F> static void start(unsigned ncpu, F&& f)
@@ -764,7 +764,7 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
         assert(root_ref, "Root task is null");
     }
 
-    void operator()(sys::worker_pool_t<worker> workers, unsigned worker_id)
+    void operator()(worker_pool_t<worker> workers, unsigned worker_id)
     {
         order_siblings(workers, worker_id);
 
@@ -782,7 +782,7 @@ template<size_t cap_bits = 6, size_t pool_bits = cap_bits> class worker
     }
 
   private:
-    void order_siblings(sys::worker_pool_t<worker> workers, unsigned worker_id)
+    void order_siblings(worker_pool_t<worker> workers, unsigned worker_id)
     {
         size_t nsiblings = workers.size() - 1;
         siblings         = make_unique<worker*[]>(nsiblings);
