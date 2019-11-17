@@ -8,66 +8,24 @@
 #include <sys/mman.h>
 
 #include "gatbl/utils/compatibility.hpp"
-#include "gatbl/utils/iterator_pair.hpp"
+#include "gatbl/sys/serialization.hpp"
 #include "gatbl/sys/exceptions.hpp"
 #include "gatbl/sys/mmap.hpp"
 
 namespace gatbl {
 
-struct bound_cursor
-{
-    size_t size() const noexcept { return _size; }
-    size_t tell() const noexcept { return _pos; }
-    bool   eof() const noexcept { return tell() >= size(); }
-
-    /// We use a user-space position since async read don't use the native file descriptor position
-    size_t seek(off_t offset, int whence = SEEK_SET)
-    {
-        switch (whence) {
-            case SEEK_SET: break;
-            case SEEK_CUR: offset += tell(); break;
-            case SEEK_END: offset += size(); break;
-        }
-
-        return this->setPosition(offset);
-    }
-
-  protected:
-    void   setSize(size_t size) noexcept { _size = size; }
-    size_t setPosition(ssize_t pos) noexcept
-    {
-        // clamp
-        size_t new_pos = likely(pos > 0) ? size_t(pos) : 0;
-        new_pos        = likely(new_pos < size()) ? new_pos : size();
-        return _pos    = new_pos;
-    }
-    size_t incPosition(ssize_t delta) noexcept { return setPosition(ssize_t(tell()) + delta); }
-    size_t incSize(ssize_t delta) noexcept
-    {
-        auto ssize = ssize_t(_size) + delta;
-        assume(ssize >= 0, "size underflow");
-        auto new_size = size_t(ssize);
-        _size         = likely(_size <= new_size) ? new_size : _size;
-        return _size;
-    }
-
-    void operator++() noexcept { incPosition(1); }
-
-  private:
-    size_t _pos  = 0;
-    size_t _size = 0;
-};
-
-struct file_descriptor : public bound_cursor
+/// Wrap a POSIX file descriptor into a C++ interface
+/// The offset state is managed in userspace
+struct file_descriptor
 {
     file_descriptor(const std::string& path, int flags = O_RDONLY, mode_t mode = S_IRUSR | S_IWUSR)
       : file_descriptor(check_ret(::open(path.c_str(), flags, mode), "open(\"%s\", %o)", path.c_str(), mode))
     {}
 
     file_descriptor(file_descriptor&& from) noexcept
-      : bound_cursor(std::move(from))
-      , _stat(from._stat)
-      , _fd(from._fd)
+      : _fd(from._fd)
+      , _size(from._size)
+      , _pos(from._pos)
     {
         from._fd = -1;
     }
@@ -77,20 +35,20 @@ struct file_descriptor : public bound_cursor
     {
         close();
 
-        _fd      = from._fd;
-        _stat    = from._stat;
+        _fd   = from._fd;
+        _size = from._size;
+        _pos  = from._pos;
+
         from._fd = -1;
 
-        bound_cursor::operator=(std::move(from));
         return *this;
     }
 
     /// Copy constructor
     file_descriptor(const file_descriptor& from)
-      : bound_cursor(from)
-
-      , _stat(from._stat)
-      , _fd(check_ret(::dup(from._fd), "dup(%d)", _fd))
+      : _fd(check_ret(::dup(from._fd), "dup(%d)", _fd))
+      , _size(from._size)
+      , _pos(from._pos)
     {}
 
     /// Assignement constructor
@@ -99,9 +57,9 @@ struct file_descriptor : public bound_cursor
         close();
 
         _fd   = check_ret(dup(from._fd), "dup(%d)", from._fd);
-        _stat = from._stat;
+        _size = from._size;
+        _pos  = from._pos;
 
-        bound_cursor::operator=(from);
         return *this;
     }
 
@@ -121,12 +79,10 @@ struct file_descriptor : public bound_cursor
         return file_descriptor(fd);
     }
 
-    size_t blksize() const noexcept { return static_cast<size_t>(_stat.st_blksize); }
-
     size_t truncate(size_t length)
     {
         check_ret(::ftruncate(_fd, off_t(length)), "ftruncate(%d, %zd)", _fd, length);
-        this->setSize(length);
+        _size = length;
         return length;
     }
 
@@ -151,45 +107,49 @@ struct file_descriptor : public bound_cursor
         return mmap_range<T>(_fd, len, prot, flags, addr, offset);
     }
 
-    template<typename Buffer>
-    auto pread(Buffer& buf, off_t offset) -> decltype(concepts::type_require<size_t>(as_bytes(buf)))
+    /// Read file content from offset into the buffer
+    /// The buffer begin() is advanced by the number of bytes read
+    ssize_t pread(span<byte>& buf_bytes, size_t offset)
     {
-        using gatbl::as_bytes;
-        using gatbl::size;
-        const auto buf_bytes = as_bytes(buf);
-        return check_ret(::pread(_fd, begin(buf_bytes), size(buf_bytes), offset),
-                         "pread(%d, buf, %zd, %zd)",
-                         _fd,
-                         size(buf_bytes),
-                         offset);
+        ssize_t sz = check_ret(::pread(_fd, buf_bytes.begin(), buf_bytes.size(), off_t(offset)),
+                               "pread(%d, buf, %zd, %zd)",
+                               _fd,
+                               buf_bytes.size(),
+                               offset);
+        buf_bytes  = {buf_bytes.begin() + sz, buf_bytes.end()};
+        return sz;
     }
 
-    template<typename Buffer>
-    auto pwrite(const Buffer& buf, off_t offset) -> decltype(concepts::type_require<size_t>(as_bytes(buf)))
+    /// Write buffer at offset
+    /// The buffer begin() is advanced by the number of bytes written
+    ssize_t pwrite(span<const byte>& buf_bytes, size_t offset)
     {
-        using gatbl::as_bytes;
-        using gatbl::size;
-        const auto buf_bytes = as_bytes(buf);
-        ssize_t    sz        = check_ret(::pwrite(_fd, begin(buf_bytes), size(buf_bytes), offset),
+        ssize_t sz    = check_ret(::pwrite(_fd, buf_bytes.begin(), buf_bytes.size(), off_t(offset)),
                                "pwrite(%d, buf, %zd, %zd)",
                                _fd,
-                               size(buf_bytes),
+                               buf_bytes.size(),
                                offset);
-        this->incSize(sz);
+        buf_bytes     = {buf_bytes.begin() + sz, buf_bytes.end()};
+        size_t endpos = offset + size_t(sz);
+        if (endpos > this->_size) _size = endpos;
         return sz;
     }
 
-    template<typename Buffer> size_t read(Buffer& buf)
+    /// Read file content from offset into the buffer
+    /// The buffer begin() is advanced by the number of bytes read
+    ssize_t read(span<byte>& buf)
     {
-        size_t sz = file_descriptor::pread(buf, this->tell());
-        this->incPosition(ssize_t(sz));
+        ssize_t sz = file_descriptor::pread(buf, this->tell());
+        _pos += size_t(sz);
         return sz;
     }
 
-    template<typename Buffer> size_t write(const Buffer& buf)
+    /// Write buffer at current position
+    /// The buffer begin() is advanced by the number of bytes written
+    ssize_t write(span<const byte>& buf)
     {
-        size_t sz = file_descriptor::pwrite(buf, this->tell());
-        this->incPosition(ssize_t(sz));
+        ssize_t sz = file_descriptor::pwrite(buf, this->tell());
+        _pos += size_t(sz);
         return sz;
     }
 
@@ -201,6 +161,7 @@ struct file_descriptor : public bound_cursor
 #else
     size_t readahead(off_t offset, size_t count) const { return 0; }
 #endif
+
     void close()
     {
         if (_fd >= 0) { check_ret(::close(_fd), "close(%d)", _fd); }
@@ -211,20 +172,65 @@ struct file_descriptor : public bound_cursor
 
     operator bool() const noexcept { return _fd > 0; }
 
+    size_t size() const noexcept { return _size; }
+    size_t tell() const noexcept { return _pos; }
+    bool   eof() const noexcept { return tell() >= size(); }
+
+    /// We use a user-space position since async read don't use the native file descriptor position
+    size_t seek(off_t offset, int whence = SEEK_SET)
+    {
+        switch (whence) {
+            case SEEK_SET: break;
+            case SEEK_CUR: offset += tell(); break;
+            case SEEK_END: offset += size(); break;
+        }
+
+        // clamp
+        size_t new_pos = likely(offset > 0) ? size_t(offset) : 0;
+        new_pos        = likely(new_pos < _size) ? new_pos : _size;
+        return _pos    = new_pos;
+    }
+
   protected:
     explicit file_descriptor(int fd)
       : _fd(fd)
     {
+        struct stat _stat = {};
         check_ret(::fstat(fd, &_stat), "stat(%d)", fd);
-        this->setSize(size_t(_stat.st_size));
+        _size = size_t(_stat.st_size);
     }
-
     int getfd() const noexcept { return _fd; }
 
-  private:
-    struct stat _stat = {};
-    int         _fd   = -1;
+  protected:
+    int    _fd   = -1;
+    size_t _size = 0;
+    size_t _pos  = 0;
 };
+
+template<typename T>
+static inline auto
+write(file_descriptor& fd, const T& v) -> decltype(concepts::type_require<file_descriptor&>(as_bytes(v)))
+{
+    const_bytes span = as_bytes(v);
+    do
+        fd.write(span);
+    while (unlikely(!span.empty()));
+
+    return fd;
+}
+
+template<typename T>
+static inline auto
+read(file_descriptor& fd, T&& v) -> decltype(concepts::type_require<file_descriptor&>(as_bytes(v)))
+{
+    bytes span = as_bytes(v);
+    do {
+        ssize_t sz = fd.read(span);
+        if (sz == 0) throw_syserr("read(): unexpected eof");
+    } while (unlikely(!span.empty()));
+
+    return fd;
+}
 
 } // namespace gatbl
 
