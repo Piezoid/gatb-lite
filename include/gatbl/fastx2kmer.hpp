@@ -33,6 +33,7 @@ struct sequence2kmers_base : private Window
 
     void clear()
     {
+        done = false;
         empty_window();
         _pos = 0;
     }
@@ -67,6 +68,7 @@ struct sequence2kmers_base : private Window
             }
             ++_pos;
             derived().on_kmer();
+            if (unlikely(done)) break;
         }
         _unfilled_nucs = unfilled_nucs;
     }
@@ -83,10 +85,10 @@ struct sequence2kmers_base : private Window
     bool start()
     {
         empty_window();
-        return derived().on_chrom();
+        return !done && derived().on_chrom();
     }
 
-    // Adds a full sequence
+    /// Adds a full sequence
     template<typename R> void sequence(R&& r)
     {
         if (start()) {
@@ -104,7 +106,11 @@ struct sequence2kmers_base : private Window
         content.advise_hugepage();
 
         if (hasEnding(fin, ".fq") || hasEnding(fin, ".fastq")) {
-            RANGES_FOR(auto& rec, sequence_range<fastq_record<>>(content)) { sequence(rec.sequence()); }
+            RANGES_FOR(auto& rec, sequence_range<fastq_record<>>(content))
+            {
+                sequence(rec.sequence());
+                if (unlikely(done)) break;
+            }
         } else if (hasEnding(fin, ".fa") || hasEnding(fin, ".fasta")) {
             bool dontskip = false;
             RANGES_FOR(auto& line, sequence_range<line_record<>>(content))
@@ -121,6 +127,7 @@ struct sequence2kmers_base : private Window
                     ++it;
                     dontskip = start();
                 }
+                if (unlikely(done)) break;
             }
         } else {
             throw std::runtime_error("unsupported file format");
@@ -155,6 +162,9 @@ struct sequence2kmers_base : private Window
 
     size_t  _pos = 0;
     ksize_t _unfilled_nucs;
+
+  protected:
+    bool done = false;
 };
 
 } // namespace details
