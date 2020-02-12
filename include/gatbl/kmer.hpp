@@ -975,13 +975,17 @@ struct map_window
 /// The log2 entropy ranges from 0 to 4
 template<typename kmer_t = kmer_t> class entropy_filter
 {
-    using lktnum_t                        = uint16_t;
-    static constexpr double     precision = std::numeric_limits<lktnum_t>::max() * 1.884169; // * exp(1)/log(2)
-    std::unique_ptr<lktnum_t[]> _xlogx_lkt;
-    const size_t                _threshold;
-    const ksize_t               _n;
 
-    size_t hot_fun _entropy(kmer_t kmer) const
+    using lktnum_t   = uint16_t; // scaled (fixed point) entropy of a signle 2-mer
+    using integral_t = size_t;   // scaled entropy
+
+    static constexpr double precision = std::numeric_limits<lktnum_t>::max() * 1.88416938536372; // * log(2)/exp(-1)
+    std::unique_ptr<lktnum_t[]>
+                     _xlogx_lkt; // Lookup table giving the entropy contribution of a signle 2-mer given it's number of occurrences
+    const integral_t _threshold;
+    const ksize_t    _n;
+
+    integral_t hot_fun _entropy(kmer_t kmer) const
     {
         uint8_t counts[16] = {0};
 
@@ -991,7 +995,7 @@ template<typename kmer_t = kmer_t> class entropy_filter
         }
         assume(kmer < 4, "kmer larger than expected"); // A single base should remain
 
-        size_t ent = 0;
+        integral_t ent = 0;
         for (int i = 0; i < 16; i++) {
             assume(counts[i] <= _n, "count out of range");
             ent += _xlogx_lkt[counts[i]];
@@ -1010,8 +1014,13 @@ template<typename kmer_t = kmer_t> class entropy_filter
         _xlogx_lkt[0]  = 0;
         _xlogx_lkt[_n] = 0;
         for (int i = 1; i < _n; i++) {
-            double p      = i / double(_n);
+            double p = i / double(_n);
+            // Full range value encountered for -p*log2(p) = 0 => p_max = exp(-1)
+            // E_max = -log(p_max) / log(2) * p_max = exp(-1) / log(2)
+            // precision = lktnum / E_max =  lktnum * 1.88417
             _xlogx_lkt[i] = lktnum_t(-log2(p) * p * precision);
+            assume(size_t(-log2(p) * p * precision) <= size_t(std::numeric_limits<lktnum_t>::max()),
+                   "out of range lookup entry");
         }
     }
 
@@ -1025,6 +1034,10 @@ template<typename kmer_t = kmer_t> class entropy_filter
     }
 
     double entropy(kmer_t kmer) const { return double(_entropy(kmer)) / precision; }
+
+    integral_t numerator(kmer_t kmer) const { return _entropy(kmer); }
+
+    static constexpr integral_t denominator(kmer_t = 0) { return precision; }
 
     bool hot_fun operator()(kmer_t kmer) const { return _entropy(kmer) >= _threshold; }
 };
