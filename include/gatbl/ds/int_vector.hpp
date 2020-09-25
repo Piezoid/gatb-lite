@@ -385,7 +385,7 @@ class vector
         using gatbl::write;
         size_t header = v.Spec::pack_size_and_width(v._size);
         write(out, header);
-        write(out, span<const word_t>(v._data.get(), v.words_required(v._size)));
+        write(out, span<word_t>(v._data.get(), v.words_required(v._size)));
         return out;
     }
 
